@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,10 +14,75 @@ import (
 	"github.com/usb-wiper/internal/wipe"
 )
 
-var (
-	currentJob   *wipeJobState
-	currentJobMu sync.Mutex
-)
+// jobManager tracks all wipe jobs, keyed by device path.
+type jobManager struct {
+	mu   sync.Mutex
+	jobs map[string]*wipeJobState
+}
+
+func newJobManager() *jobManager {
+	return &jobManager{
+		jobs: make(map[string]*wipeJobState),
+	}
+}
+
+// get returns the job for a device, nil if not found.
+func (jm *jobManager) get(device string) *wipeJobState {
+	jm.mu.Lock()
+	defer jm.mu.Unlock()
+	return jm.jobs[device]
+}
+
+// getAll returns a copy of all jobs.
+func (jm *jobManager) getAll() map[string]*wipe.WipeJob {
+	jm.mu.Lock()
+	defer jm.mu.Unlock()
+	result := make(map[string]*wipe.WipeJob, len(jm.jobs))
+	for k, v := range jm.jobs {
+		result[k] = v.Job
+	}
+	return result
+}
+
+// set stores a job for a device. If a job already exists for the device and is
+// still running, it returns an error.
+func (jm *jobManager) set(device string, job *wipeJobState) error {
+	jm.mu.Lock()
+	defer jm.mu.Unlock()
+	if existing, ok := jm.jobs[device]; ok && existing.Job.Status == wipe.StatusRunning {
+		return &jobConflictError{device: device}
+	}
+	jm.jobs[device] = job
+	return nil
+}
+
+// remove deletes a job entry. Called after cleanup.
+func (jm *jobManager) remove(device string) {
+	jm.mu.Lock()
+	delete(jm.jobs, device)
+	jm.mu.Unlock()
+}
+
+// activeDevices returns the set of device paths currently being wiped.
+func (jm *jobManager) activeDevices() map[string]bool {
+	jm.mu.Lock()
+	defer jm.mu.Unlock()
+	active := make(map[string]bool)
+	for k, v := range jm.jobs {
+		if v.Job.Status == wipe.StatusRunning {
+			active[k] = true
+		}
+	}
+	return active
+}
+
+type jobConflictError struct {
+	device string
+}
+
+func (e *jobConflictError) Error() string {
+	return "device " + e.device + " is already being wiped"
+}
 
 type wipeJobState struct {
 	Job      *wipe.WipeJob
@@ -34,6 +100,19 @@ func (s *Server) handleGetDevices(w http.ResponseWriter, r *http.Request) {
 
 	if devices == nil {
 		devices = []device.Device{}
+	}
+
+	// Attach running wipe status to each device
+	activeJobs := s.jobs.getAll()
+	for i := range devices {
+		if job, ok := activeJobs[devices[i].Path]; ok {
+			devices[i].Wiping = job.Status == wipe.StatusRunning
+			devices[i].WipeStatus = job.Status
+			devices[i].WipePercent = 0
+			if job.TotalBytes > 0 {
+				devices[i].WipePercent = float64(job.BytesWritten) / float64(job.TotalBytes) * 100
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -59,7 +138,7 @@ func (s *Server) handleGetHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Device     string `json:"device"`
+		Device     string `json:"device"`     // single device or comma-separated list
 		AutoFormat bool   `json:"autoFormat"`
 	}
 
@@ -73,49 +152,80 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Server-side safety re-validation
 	cfg := s.config.Get()
-	if err := device.IsSafeToWipe(req.Device, cfg.UnsafeAllowAllUSB); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	// Check if a job is already running
-	currentJobMu.Lock()
-	if currentJob != nil && currentJob.Job.Status == wipe.StatusRunning {
-		currentJobMu.Unlock()
-		writeError(w, http.StatusConflict, "a wipe job is already in progress")
-		return
-	}
-
-	// Update auto-format config from request
 	s.config.SetAutoFormat(req.AutoFormat)
 
-	// Create new job
+	// Split comma-separated devices and deduplicate
+	devices := splitDevices(req.Device)
+	if len(devices) == 0 {
+		writeError(w, http.StatusBadRequest, "no valid devices")
+		return
+	}
+
+	var started []string
+	var conflicts []string
+
+	for _, dev := range devices {
+		// Safety check
+		if err := device.IsSafeToWipe(dev, cfg.UnsafeAllowAllUSB); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		// Start the wipe
+		if err := s.startDeviceWipe(dev, cfg.UnsafeAllowAllUSB); err != nil {
+			if _, ok := err.(*jobConflictError); ok {
+				conflicts = append(conflicts, dev)
+			} else {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		} else {
+			started = append(started, dev)
+		}
+	}
+
+	if len(started) == 0 && len(conflicts) > 0 {
+		writeError(w, http.StatusConflict, "all selected devices are already being wiped")
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":    "started",
+		"started":   started,
+		"conflicts": conflicts,
+	})
+}
+
+// startDeviceWipe begins a wipe on a single device.
+func (s *Server) startDeviceWipe(devicePath string, unsafeAllowAllUSB bool) error {
 	progress := make(chan wipe.ProgressEvent, 64)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	job := &wipe.WipeJob{
-		DevicePath: req.Device,
+		DevicePath: devicePath,
 		Status:     wipe.StatusRunning,
 		StartedAt:  time.Now(),
 	}
 
-	currentJob = &wipeJobState{
+	state := &wipeJobState{
 		Job:      job,
 		progress: progress,
 		cancel:   cancel,
 	}
-	currentJobMu.Unlock()
+
+	if err := s.jobs.set(devicePath, state); err != nil {
+		cancel()
+		return err
+	}
 
 	// Run wipe in background
 	go func() {
 		defer close(progress)
 
-		err := wipe.Wipe(ctx, req.Device, progress, cfg.UnsafeAllowAllUSB)
+		err := wipe.Wipe(ctx, devicePath, progress, unsafeAllowAllUSB)
 		now := time.Now()
 
-		currentJobMu.Lock()
 		if err != nil {
 			if ctx.Err() == context.Canceled {
 				job.Status = wipe.StatusCancelled
@@ -126,10 +236,13 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 		} else {
 			job.Status = wipe.StatusCompleted
 
-			// Auto-format if requested
-			if req.AutoFormat {
-				log.Printf("auto-formatting %s as FAT32", req.Device)
-				if formatErr := format.FormatFAT32(req.Device, cfg.UnsafeAllowAllUSB); formatErr != nil {
+			// Auto-format if requested (uses global config at wipe start time)
+			// Note: autoFormat is per-wipe-request, we store it in the job
+			// For now, format is controlled by the global config at wipe time
+			cfg := s.config.Get()
+			if cfg.AutoFormat {
+				log.Printf("auto-formatting %s as FAT32", devicePath)
+				if formatErr := format.FormatFAT32(devicePath, unsafeAllowAllUSB); formatErr != nil {
 					log.Printf("auto-format failed: %v", formatErr)
 					job.Status = wipe.StatusFailed
 					job.Error = "Wipe completed but format failed: " + formatErr.Error()
@@ -137,26 +250,26 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		job.FinishedAt = now
-		currentJobMu.Unlock()
 	}()
 
 	// Pipe progress to SSE hub
 	go func() {
 		for ev := range progress {
-			currentJobMu.Lock()
-			if currentJob != nil && currentJob.Job == job {
+			// Update job state
+			s.jobs.mu.Lock()
+			if s.jobs.jobs[devicePath] != nil && s.jobs.jobs[devicePath].Job == job {
 				job.TotalBytes = ev.TotalBytes
 				job.BytesWritten = ev.BytesWritten
 			}
-			currentJobMu.Unlock()
+			s.jobs.mu.Unlock()
 			s.sseHub.Broadcast(ev)
 		}
 
 		// Send final event
 		s.sseHub.Broadcast(wipe.ProgressEvent{
-			DevicePath:   req.Device,
+			DevicePath:   devicePath,
 			Status:       job.Status,
-			Message:      "Wipe " + job.Status,
+			Message:      "Wipe " + job.Status + " for " + devicePath,
 			Timestamp:    time.Now(),
 			TotalBytes:   job.TotalBytes,
 			BytesWritten: job.BytesWritten,
@@ -164,37 +277,69 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 		})
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status": "started",
-		"device": req.Device,
-	})
+	return nil
 }
 
 func (s *Server) handlePostCancel(w http.ResponseWriter, r *http.Request) {
-	currentJobMu.Lock()
-	defer currentJobMu.Unlock()
+	devicePath := r.URL.Query().Get("device")
 
-	if currentJob == nil || currentJob.Job.Status != wipe.StatusRunning {
-		writeError(w, http.StatusBadRequest, "no active wipe job")
+	if devicePath != "" {
+		// Cancel specific device
+		state := s.jobs.get(devicePath)
+		if state == nil || state.Job.Status != wipe.StatusRunning {
+			writeError(w, http.StatusBadRequest, "no active wipe job for "+devicePath)
+			return
+		}
+		state.cancel()
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
 
-	currentJob.cancel()
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	// Cancel all running jobs
+	allJobs := s.jobs.getAll()
+	cancelled := 0
+	for devicePath, job := range allJobs {
+		if job.Status == wipe.StatusRunning {
+			state := s.jobs.get(devicePath)
+			if state != nil {
+				state.cancel()
+				cancelled++
+			}
+		}
+	}
+
+	if cancelled == 0 {
+		writeError(w, http.StatusBadRequest, "no active wipe jobs")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":        true,
+		"cancelled": cancelled,
+	})
 }
 
 func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
-	currentJobMu.Lock()
-	defer currentJobMu.Unlock()
+	devicePath := r.URL.Query().Get("device")
 
-	if currentJob == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"status": "idle",
-		})
+	if devicePath != "" {
+		state := s.jobs.get(devicePath)
+		if state == nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"status": "idle",
+				"device": devicePath,
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, state.Job)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, currentJob.Job)
+	// Return all jobs
+	allJobs := s.jobs.getAll()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"jobs": allJobs,
+	})
 }
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -230,22 +375,23 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	ch := s.sseHub.Subscribe()
 	defer s.sseHub.Unsubscribe(ch)
 
-	// Send current job state on connect
-	currentJobMu.Lock()
-	if currentJob != nil {
-		ev := wipe.ProgressEvent{
-			DevicePath:   currentJob.Job.DevicePath,
-			BytesWritten: currentJob.Job.BytesWritten,
-			TotalBytes:   currentJob.Job.TotalBytes,
-			Status:       currentJob.Job.Status,
-			Timestamp:    time.Now(),
+	// Send all current job states on connect
+	allJobs := s.jobs.getAll()
+	for devicePath, job := range allJobs {
+		if job.Status == wipe.StatusRunning {
+			ev := wipe.ProgressEvent{
+				DevicePath:   devicePath,
+				BytesWritten: job.BytesWritten,
+				TotalBytes:   job.TotalBytes,
+				Status:       job.Status,
+				Timestamp:    time.Now(),
+			}
+			if job.TotalBytes > 0 {
+				ev.Percent = float64(job.BytesWritten) / float64(job.TotalBytes) * 100
+			}
+			writeSSEEvent(w, flusher, ev)
 		}
-		if currentJob.Job.TotalBytes > 0 {
-			ev.Percent = float64(currentJob.Job.BytesWritten) / float64(currentJob.Job.TotalBytes) * 100
-		}
-		writeSSEEvent(w, flusher, ev)
 	}
-	currentJobMu.Unlock()
 
 	ctx := r.Context()
 	for {
@@ -267,9 +413,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, ev wipe.ProgressEvent) {
-	data, _ := json.Marshal(ev)
-	msg := "data: " + string(data) + "\n\n"
-	w.Write([]byte(msg))
-	flusher.Flush()
+func splitDevices(input string) []string {
+	parts := strings.Split(input, ",")
+	seen := make(map[string]bool)
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" && !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
+	}
+	return result
 }

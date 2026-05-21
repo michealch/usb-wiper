@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/usb-wiper/internal/config"
+	"github.com/usb-wiper/internal/wipe"
 )
 
 //go:embed static/*
@@ -20,6 +21,7 @@ type Server struct {
 	port   string
 	config *config.Manager
 	sseHub *SSEHub
+	jobs   *jobManager
 	server *http.Server
 }
 
@@ -29,6 +31,7 @@ func New(port string, unsafeAllowAllUSB bool) *Server {
 		port:   port,
 		config: config.New(unsafeAllowAllUSB),
 		sseHub: NewSSEHub(),
+		jobs:   newJobManager(),
 	}
 }
 
@@ -117,4 +120,11 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, ev wipe.ProgressEvent) {
+	data, _ := json.Marshal(ev)
+	msg := "data: " + string(data) + "\n\n"
+	w.Write([]byte(msg))
+	flusher.Flush()
 }

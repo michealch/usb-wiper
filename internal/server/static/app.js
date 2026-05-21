@@ -2,6 +2,15 @@
 
 let selectedDevice = null;
 let eventSource = null;
+let wipeInProgress = false; // tracks if ANY device is wiping
+
+// Restore selected device from sessionStorage on page load
+(function restoreSelection() {
+  const saved = sessionStorage.getItem('selectedDevice');
+  if (saved) {
+    selectedDevice = saved;
+  }
+})();
 
 // ---- Device list ----
 
@@ -22,6 +31,8 @@ async function loadDevices() {
     }
     noDevices.style.display = 'none';
 
+    let anyWiping = false;
+
     devices.forEach(d => {
       const row = tbody.insertRow();
       row.insertCell().textContent = d.path;
@@ -29,9 +40,14 @@ async function loadDevices() {
       row.insertCell().textContent = formatBytes(d.sizeBytes);
       row.insertCell().textContent = d.mounted ? '✓ ' + d.mountPoints.join(', ') : 'No';
 
-      // Status column: show wipe-block reason or "Ready"
+      // Status column: show wipe-block reason, wiping progress, or "Ready"
       const statusCell = row.insertCell();
-      if (d.wipeBlocked) {
+      if (d.wiping) {
+        anyWiping = true;
+        const pct = (d.wipePercent || 0).toFixed(1);
+        statusCell.innerHTML = `<span style="color:#4caf50">Wiping ${pct}%</span>`;
+        statusCell.title = d.wipeStatus || 'running';
+      } else if (d.wipeBlocked) {
         statusCell.textContent = '⚠ Blocked';
         statusCell.title = d.blockReason || '';
         statusCell.style.color = '#e6a817';
@@ -40,28 +56,82 @@ async function loadDevices() {
         statusCell.style.color = '#4caf50';
       }
 
+      // Action button
       const sel = row.insertCell();
       const btn = document.createElement('button');
       btn.className = 'btn';
-      btn.textContent = d.wipeBlocked ? 'Inspect' : 'Select';
-      btn.disabled = !!d.wipeBlocked;
-      btn.onclick = () => selectDevice(d.path);
+      if (d.wiping) {
+        btn.textContent = 'Wiping...';
+        btn.disabled = true;
+      } else if (d.wipeBlocked) {
+        btn.textContent = 'Inspect';
+        btn.onclick = () => selectDevice(d.path);
+      } else {
+        btn.textContent = 'Wipe';
+        btn.className = 'btn btn-danger';
+        btn.onclick = () => startDeviceWipe(d.path);
+        // Click on the row itself to inspect health
+        row.style.cursor = 'pointer';
+        row.onclick = () => selectDevice(d.path);
+      }
       sel.appendChild(btn);
 
       if (d.path === selectedDevice) {
         row.style.background = 'rgba(15, 52, 96, 0.4)';
       }
     });
+
+    // Track global wipe state
+    wipeInProgress = anyWiping;
+    updateWipeUI();
+
   } catch (err) {
     logMessage('Error loading devices: ' + err.message);
   }
 }
 
-// ---- Device selection ----
+// ---- Per-device wipe ----
+
+async function startDeviceWipe(devicePath) {
+  const confirmed = confirm(
+    `DESTROY ALL DATA on ${devicePath}?\n\nThis cannot be undone.`
+  );
+  if (!confirmed) return;
+
+  const autoFormat = document.getElementById('auto-format').checked;
+
+  logMessage(`Starting wipe on ${devicePath}...`);
+
+  try {
+    const res = await fetch('/api/wipe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device: devicePath, autoFormat })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to start wipe');
+    }
+
+    const data = await res.json();
+    data.started.forEach(d => logMessage('Wipe started on ' + d));
+    if (data.conflicts && data.conflicts.length > 0) {
+      data.conflicts.forEach(d => logMessage('Skipped ' + d + ': already wiping'));
+    }
+
+  } catch (err) {
+    logMessage('Error: ' + err.message);
+  }
+
+  loadDevices();
+}
+
+// ---- Device selection (for health / inspection) ----
 
 function selectDevice(path) {
   selectedDevice = path;
-  document.getElementById('start').disabled = false;
+  sessionStorage.setItem('selectedDevice', path);
   document.getElementById('health').style.display = 'block';
   document.getElementById('health-device').textContent = path;
   loadHealth(path);
@@ -102,51 +172,29 @@ async function loadHealth(path) {
   }
 }
 
-// ---- Wipe control ----
+// ---- Global wipe bar ----
 
-async function startWipe() {
-  if (!selectedDevice) return;
+function updateWipeUI() {
+  const cancelBtn = document.getElementById('cancel');
 
-  const confirmed = confirm(
-    `DESTROY ALL DATA on ${selectedDevice}?\n\nThis cannot be undone.`
-  );
-  if (!confirmed) return;
-
-  const autoFormat = document.getElementById('auto-format').checked;
-
-  document.getElementById('start').disabled = true;
-  document.getElementById('cancel').disabled = false;
-  document.getElementById('log').textContent = 'Starting wipe...\n';
-
-  try {
-    const res = await fetch('/api/wipe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device: selectedDevice, autoFormat })
-    });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to start wipe');
-    }
-
-    logMessage('Wipe started on ' + selectedDevice);
-
-  } catch (err) {
-    logMessage('Error: ' + err.message);
-    document.getElementById('start').disabled = false;
-    document.getElementById('cancel').disabled = true;
+  if (wipeInProgress) {
+    cancelBtn.disabled = false;
+  } else {
+    cancelBtn.disabled = true;
   }
 }
 
-async function cancelWipe() {
+async function cancelAllWipes() {
+  const confirmed = confirm('Cancel ALL active wipes?');
+  if (!confirmed) return;
+
   try {
     const res = await fetch('/api/cancel', { method: 'POST' });
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || 'Cancel failed');
     }
-    logMessage('Cancelling wipe...');
+    logMessage('Cancelling all wipes...');
   } catch (err) {
     logMessage('Error: ' + err.message);
   }
@@ -171,7 +219,6 @@ function connectSSE() {
   };
 
   eventSource.onerror = () => {
-    // Reconnect after 2 seconds
     setTimeout(connectSSE, 2000);
   };
 }
@@ -180,27 +227,26 @@ function updateProgress(ev) {
   const progress = document.getElementById('progress');
   const progressText = document.getElementById('progress-text');
 
-  if (ev.totalBytes > 0) {
-    progress.value = ev.percent || 0;
-    progressText.textContent = (ev.percent || 0).toFixed(1) + '%';
-  }
-
   if (ev.message) {
     logMessage(ev.message);
   }
 
+  // Update per-device progress for the device being wiped
+  if (ev.totalBytes > 0 && ev.devicePath) {
+    // Update the global progress bar with the latest device
+    progress.value = ev.percent || 0;
+    progressText.textContent = (ev.percent || 0).toFixed(1) + '%';
+  }
+
   if (ev.status === 'completed') {
-    document.getElementById('start').disabled = false;
-    document.getElementById('cancel').disabled = true;
-    logMessage('=== Wipe completed ===');
+    logMessage('=== Wipe completed for ' + ev.devicePath + ' ===');
+    loadDevices();
   } else if (ev.status === 'failed') {
-    document.getElementById('start').disabled = false;
-    document.getElementById('cancel').disabled = true;
-    logMessage('=== Wipe failed ===');
+    logMessage('=== Wipe failed for ' + ev.devicePath + ' ===');
+    loadDevices();
   } else if (ev.status === 'cancelled') {
-    document.getElementById('start').disabled = false;
-    document.getElementById('cancel').disabled = true;
-    logMessage('=== Wipe cancelled ===');
+    logMessage('=== Wipe cancelled for ' + ev.devicePath + ' ===');
+    loadDevices();
   }
 }
 
@@ -242,12 +288,18 @@ function formatBytes(bytes) {
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('refresh').addEventListener('click', loadDevices);
-  document.getElementById('start').addEventListener('click', startWipe);
-  document.getElementById('cancel').addEventListener('click', cancelWipe);
+  document.getElementById('cancel').addEventListener('click', cancelAllWipes);
 
   loadDevices();
   connectSSE();
 
-  // Refresh devices every 10 seconds
-  setInterval(loadDevices, 10000);
+  // Restore health panel if a device was previously selected
+  if (selectedDevice) {
+    document.getElementById('health').style.display = 'block';
+    document.getElementById('health-device').textContent = selectedDevice;
+    loadHealth(selectedDevice);
+  }
+
+  // Refresh devices every 5 seconds
+  setInterval(loadDevices, 5000);
 });

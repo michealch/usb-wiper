@@ -19,6 +19,9 @@ type Device struct {
 	IsUSB       bool     `json:"isUSB"`
 	WipeBlocked bool     `json:"wipeBlocked"`
 	BlockReason string   `json:"blockReason"`
+	Wiping      bool     `json:"wiping"`
+	WipeStatus  string   `json:"wipeStatus"`
+	WipePercent float64  `json:"wipePercent"`
 	Mounted     bool     `json:"mounted"`
 	MountPoints []string `json:"mountPoints"`
 }
