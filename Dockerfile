@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /out/usb-wiper /usr/local/bin/usb-wiper
 
-RUN adduser --disabled-password --gecos "" --uid 1000 wiper
+RUN useradd --no-create-home --shell /usr/sbin/nologin --uid 1000 wiper
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:8080/healthz || exit 1
