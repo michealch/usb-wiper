@@ -35,6 +35,8 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,format=short
+            # Move 'latest' to the most recent stable release
+            type=semver,pattern={{version}},value=latest
           labels: |
             org.opencontainers.image.title=USB Wiper
             org.opencontainers.image.description=Secure USB device wiping tool
