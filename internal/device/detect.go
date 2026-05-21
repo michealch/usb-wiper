@@ -30,7 +30,7 @@ func ListUSBDevices(unsafeAllowAllUSB bool) ([]Device, error) {
 		return nil, fmt.Errorf("read /sys/block: %w", err)
 	}
 
-	var devices []Device
+	devices := make([]Device, 0)
 	for _, entry := range entries {
 		name := entry.Name()
 
