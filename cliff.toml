@@ -1,11 +1,5 @@
 [changelog]
-header = """
-# Changelog
-
-All notable changes to this project will be documented in this file.\n
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n
-"""
+header = ""
 body = """
 {% if version %}
 ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
@@ -13,19 +7,12 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | upper_first }}
 {% for commit in commits %}
-- {{ commit.message | upper_first | trim }}{% if commit.github.username %} ([{{ commit.github.username }}]({{ commit.github.url }})){% endif %}\
-{% if commit.breaking %} **BREAKING**{% endif %}\
-{%- endfor %}
+- {{ commit.message | upper_first | trim }}{% if commit.breaking %} **BREAKING**{% endif %}{% endfor %}
+
 {% endfor %}
-{%- endif -%}
-"""
-footer = """
-{% if previous and previous.version %}
-[{{ version | trim_start_matches(pat="v") }}]: \
-    https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
-    /compare/{{ previous.version }}...{{ version }}
 {% endif %}
 """
+footer = ""
 trim = true
 
 [git]
@@ -41,7 +28,6 @@ commit_parsers = [
     { message = "^ci", group = "ci" },
     { message = "^chore", group = "chore" },
     { message = "^style", group = "styling" },
-    { body = ".*BREAKING", group = "breaking" },
 ]
 protect_breaking_commits = false
 filter_commits = false
@@ -50,5 +36,3 @@ skip_tags = ""
 ignore_tags = ""
 topo_order = false
 sort_commits = "oldest"
-link_parsers = []
-limit_commits = 500

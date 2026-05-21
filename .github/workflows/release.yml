@@ -21,22 +21,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate changelog
+      - name: Generate changelog for this release
         id: changelog
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
           args: --latest --strip header
-        env:
-          OUTPUT: CHANGELOG.md
-
-      - name: Bump version and update CHANGELOG
-        run: |
-          # Get changelog content
-          CHANGELOG_CONTENT=$(cat CHANGELOG.md)
-          # Prepend to existing CHANGELOG.md
-          echo "$CHANGELOG_CONTENT" | cat - CHANGELOG.md > /tmp/new-changelog.md
-          mv /tmp/new-changelog.md CHANGELOG.md
 
       - name: Docker meta
         id: meta
@@ -71,14 +61,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Commit updated CHANGELOG
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
-          git commit -m "chore: update CHANGELOG for ${{ github.ref_name }}" || true
-          git push origin HEAD:main || true
 
       - name: Parse version
         id: version

@@ -1,0 +1,57 @@
+name: Auto Tag
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Bump version and tag
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, 'chore: update CHANGELOG') && !contains(github.event.head_commit.message, 'chore: release')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate changelog and bump version
+        id: bump
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --bump --unreleased --strip header
+        env:
+          OUTPUT: CHANGES.md
+
+      - name: Check if release is needed
+        id: check
+        run: |
+          BUMP_VERSION="${{ steps.bump.outputs.version }}"
+          if [ -z "$BUMP_VERSION" ]; then
+            echo "No version bump needed (no feat/fix commits since last tag)"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "skip=false" >> $GITHUB_OUTPUT
+          echo "version=v$BUMP_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update CHANGELOG
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          cat CHANGES.md | cat - CHANGELOG.md > /tmp/new-changelog.md
+          mv /tmp/new-changelog.md CHANGELOG.md
+          rm CHANGES.md
+
+      - name: Commit and tag
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore: release ${{ steps.check.outputs.version }}" || true
+          git tag -a ${{ steps.check.outputs.version }} -m "Release ${{ steps.check.outputs.version }}"
+          git push origin HEAD:main --tags
