@@ -1,4 +1,14 @@
 
+## [0.3.0] - 2026-05-21
+
+
+### Added
+
+- Support wiping multiple USB devices simultaneously
+
+
+
+
 ## [0.1.2] - 2026-05-21
 
 
