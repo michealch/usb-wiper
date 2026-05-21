@@ -65,7 +65,7 @@ make prod
 ### Option 4: Run without Docker (Linux only)
 
 ```bash
-# Requirements: Go 1.22+, smartmontools, dosfstools, parted, util-linux
+# Requirements: Go 1.26+, smartmontools, dosfstools, parted, util-linux
 
 make build
 sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
@@ -126,7 +126,7 @@ Some USB SSD enclosures (especially UASP-capable ones) report `removable=0` in s
 ## Development
 
 ```bash
-# Requirements: Go 1.22+, Docker, docker compose v2
+# Requirements: Go 1.26+, Docker, docker compose v2
 
 make build        # Build local binary
 make test         # Run tests with race detector
@@ -160,7 +160,7 @@ internal/
 
 ## Technology Stack
 
-- **Go 1.22+** (stdlib only, no external dependencies)
+- **Go 1.26+** (stdlib only, no external dependencies)
 - **Plain HTML5 + vanilla JS + CSS** (no frameworks)
 - **Server-Sent Events** for real-time progress
 - **Docker** with Alpine Linux

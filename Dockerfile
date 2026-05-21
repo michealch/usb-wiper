@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.6
 
 # ---- Build stage ----
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/usb-wiper ./cmd/usb-wiper
 
 # ---- Runtime stage ----
-FROM alpine:3.19
+FROM alpine:3.23
 RUN apk add --no-cache \
     smartmontools \
     dosfstools \
