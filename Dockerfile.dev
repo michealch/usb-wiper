@@ -1,0 +1,8 @@
+FROM golang:1.22-alpine
+WORKDIR /src
+RUN apk add --no-cache \
+    smartmontools dosfstools parted util-linux e2fsprogs \
+    git make
+RUN go install github.com/air-verse/air@latest
+EXPOSE 8080
+CMD ["air", "-c", ".air.toml"]

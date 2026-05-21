@@ -1,0 +1,21 @@
+services:
+  usb-wiper-dev:
+    build:
+      context: ..
+      dockerfile: Dockerfile.dev
+    container_name: usb-wiper-dev
+    privileged: true
+    volumes:
+      - ..:/src
+      - /dev:/dev
+      - /sys:/sys:ro
+      - go-mod-cache:/go/pkg/mod
+    ports:
+      - "8080:8080"
+    environment:
+      - LOG_LEVEL=debug
+      - PORT=8080
+    restart: unless-stopped
+
+volumes:
+  go-mod-cache:

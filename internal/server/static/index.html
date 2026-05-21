@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>USB Wiper</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>USB Wiper</h1>
+
+    <section id="warning">
+      <span class="icon">⚠</span> DESTROYS ALL DATA on selected device. Cannot be undone.
+    </section>
+
+    <section id="devices" class="card">
+      <h2>Devices</h2>
+      <button id="refresh" class="btn">Refresh</button>
+      <table id="device-table">
+        <thead>
+          <tr>
+            <th>Path</th>
+            <th>Model</th>
+            <th>Size</th>
+            <th>Mounted</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p id="no-devices" class="muted">No USB devices detected. Insert a USB drive and click Refresh.</p>
+    </section>
+
+    <section id="health" class="card" style="display:none;">
+      <h2>Health — <span id="health-device"></span></h2>
+      <table id="health-table"></table>
+    </section>
+
+    <section id="wipe" class="card">
+      <h2>Wipe</h2>
+      <label class="checkbox-label">
+        <input type="checkbox" id="auto-format">
+        Auto-format as FAT32 after wipe
+      </label>
+      <div class="btn-group">
+        <button id="start" class="btn btn-danger" disabled>Start Wipe</button>
+        <button id="cancel" class="btn" disabled>Cancel</button>
+      </div>
+      <progress id="progress" value="0" max="100"></progress>
+      <span id="progress-text">0%</span>
+      <pre id="log"></pre>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

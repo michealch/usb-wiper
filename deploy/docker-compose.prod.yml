@@ -1,0 +1,21 @@
+services:
+  usb-wiper:
+    image: usb-wiper:${TAG:-latest}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: usb-wiper
+    cap_add:
+      - SYS_ADMIN
+      - SYS_RAWIO
+    devices:
+      - /dev:/dev
+    volumes:
+      - /sys:/sys:ro
+    ports:
+      - "${PORT:-8181}:8080"
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PORT=8080
+      - UNSAFE_ALLOW_ALL_USB=${UNSAFE_ALLOW_ALL_USB:-false}
+    restart: unless-stopped

@@ -1,0 +1,9 @@
+.git/
+bin/
+tmp/
+*.exe
+.DS_Store
+.env
+.air.toml
+.idea/
+.vscode/

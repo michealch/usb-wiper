@@ -1,0 +1,10 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o /tmp/usb-wiper ./cmd/usb-wiper"
+  bin = "/tmp/usb-wiper"
+  include_ext = ["go", "html", "css", "js"]
+  exclude_dir = ["vendor", ".git", "bin", "tmp", "deploy"]
+  delay = 1000
+  stop_on_error = true
