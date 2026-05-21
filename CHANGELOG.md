@@ -1,3 +1,30 @@
+
+## [0.1.0] - 2026-05-21
+
+
+### Added
+
+- Switch to debian:stable-slim, add Renovate + git-cliff
+
+
+### Chore
+
+- Upgrade Go 1.22→1.26 and Alpine 3.19→3.23
+
+
+### Ci
+
+- Simplify to single Go version and single arch builds
+- Add auto-tag workflow and git-cliff version bumping
+
+
+### Documentation
+
+- Add Docker Hub info, screenshot, and environment variables to README
+- Update screenshot with actual rendered UI
+
+
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
