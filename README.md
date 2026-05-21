@@ -10,7 +10,7 @@ Securely wipe USB storage devices from your browser.
 - **SMART Health** — Display device health information (power-on hours, temperature, reallocated sectors, etc.)
 - **Web UI** — Minimal web interface with real-time progress tracking via SSE.
 - **Auto-Format** — Optional FAT32 formatting after wipe.
-- **Docker** — Runs as a single container with no external dependencies.
+- **Docker** — Runs as a single container, Debian stable-slim base.
 
 ## Quick Start
 
@@ -162,7 +162,9 @@ internal/
 - **Go 1.26+** (stdlib only, no external dependencies)
 - **Plain HTML5 + vanilla JS + CSS** (no frameworks)
 - **Server-Sent Events** for real-time progress
-- **Docker** with Alpine Linux
+- **Docker** with Debian stable-slim
+- **Renovate** bot for automated Go and base image updates
+- **git-cliff** for changelog generation
 - **MIT License**
 
 ## License

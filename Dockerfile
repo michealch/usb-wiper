@@ -12,19 +12,19 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/usb-wiper ./cmd/usb-wiper
 
 # ---- Runtime stage ----
-FROM alpine:3.23
-RUN apk add --no-cache \
+FROM debian:stable-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
     smartmontools \
     dosfstools \
     parted \
     util-linux \
     e2fsprogs \
     wget \
-    && rm -rf /var/cache/apk/*
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/usb-wiper /usr/local/bin/usb-wiper
 
-RUN adduser -D -u 1000 wiper
+RUN adduser --disabled-password --gecos "" --uid 1000 wiper
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:8080/healthz || exit 1
