@@ -2,6 +2,8 @@
 
 Securely wipe USB storage devices from your browser.
 
+![USB Wiper Screenshot](docs/screenshot.png)
+
 ## Features
 
 - **Secure Wipe** — Single-pass zero write across the entire USB device with verification.
@@ -9,64 +11,32 @@ Securely wipe USB storage devices from your browser.
 - **Web UI** — Minimal web interface with real-time progress tracking via SSE.
 - **Auto-Format** — Optional FAT32 formatting after wipe.
 - **Docker** — Runs as a single container with no external dependencies.
-
-## Environment Variables
-
-| Variable                | Default | Description                                                        |
-|-------------------------|---------|--------------------------------------------------------------------|
-| `PORT`                  | `8080`  | HTTP port the server listens on                                    |
-| `LOG_LEVEL`             | `info`  | Log level: `debug`, `info`, `warn`, `error`                        |
-| `UNSAFE_ALLOW_ALL_USB`  | (unset) | Set to `1` to skip the removable-device check for USB SSDs/enclosures |
-
-### When to use `UNSAFE_ALLOW_ALL_USB=1`
-
-Some USB SSD enclosures (especially UASP-capable ones) report `removable=0` in sysfs even though they're physically connected via USB. When this happens, the device appears in the list but shows "⚠ Blocked" and cannot be wiped. Set `UNSAFE_ALLOW_ALL_USB=1` to bypass only the removable flag check. **All other safety checks remain active** (USB bus, system mount points, root device, size limit, etc.).
+- **Multi-arch** — `linux/amd64` and `linux/arm64` images available on Docker Hub.
 
 ## Quick Start
 
-### Option 1: Clone and use docker compose
+### Option 1: Pull from Docker Hub (Recommended)
 
 ```bash
-git clone <repo-url> usb-wiper
-cd usb-wiper
-
-# Copy and edit the environment file
-cp deploy/.env.example deploy/.env
-# Edit deploy/.env — set UNSAFE_ALLOW_ALL_USB=1 if your USB SSD doesn't report as removable
-
-# Production mode
-make prod
-
-# Or: Development with hot reload (requires Go toolchain)
-make dev
-```
-
-Open [http://localhost:8080](http://localhost:8080) in your browser.
-
-### Option 2: Direct Docker commands
-
-```bash
-# Build the image
-docker build -t usb-wiper:latest .
-
-# Run (adjust port and env as needed)
 docker run --rm -it --privileged \
   -v /dev:/dev \
   -v /sys:/sys:ro \
   -p 8080:8080 \
-  -e UNSAFE_ALLOW_ALL_USB=1 \
-  usb-wiper:latest
+  michealchoudhary/usb-wiper:latest
 ```
 
-### Option 3: Docker compose standalone
+Open [http://localhost:8080](http://localhost:8080) in your browser.
+
+Available image tags: `latest`, `v0.1.0`, `0.1`, `0`
+
+### Option 2: Docker compose
 
 Create a `docker-compose.yml`:
 
 ```yaml
 services:
   usb-wiper:
-    image: usb-wiper:latest
-    build: .
+    image: michealchoudhary/usb-wiper:latest
     container_name: usb-wiper
     privileged: true
     volumes:
@@ -84,6 +54,14 @@ services:
 docker compose up -d
 ```
 
+### Option 3: Clone and build
+
+```bash
+git clone https://github.com/michealch/usb-wiper.git
+cd usb-wiper
+make prod
+```
+
 ### Option 4: Run without Docker (Linux only)
 
 ```bash
@@ -92,6 +70,18 @@ docker compose up -d
 make build
 sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 ```
+
+## Environment Variables
+
+| Variable                | Default | Description                                                        |
+|-------------------------|---------|--------------------------------------------------------------------|
+| `PORT`                  | `8080`  | HTTP port the server listens on                                    |
+| `LOG_LEVEL`             | `info`  | Log level: `debug`, `info`, `warn`, `error`                        |
+| `UNSAFE_ALLOW_ALL_USB`  | (unset) | Set to `1` to skip the removable-device check for USB SSDs/enclosures |
+
+### When to use `UNSAFE_ALLOW_ALL_USB=1`
+
+Some USB SSD enclosures (especially UASP-capable ones) report `removable=0` in sysfs even though they're physically connected via USB. When this happens, the device appears in the list but shows "⚠ Blocked" and cannot be wiped. Set `UNSAFE_ALLOW_ALL_USB=1` to bypass only the removable flag check. **All other safety checks remain active** (USB bus, system mount points, root device, size limit, etc.).
 
 ## ⚠️ Safety Warnings
 
@@ -174,6 +164,7 @@ internal/
 - **Plain HTML5 + vanilla JS + CSS** (no frameworks)
 - **Server-Sent Events** for real-time progress
 - **Docker** with Alpine Linux
+- **Multi-arch** images (AMD64 + ARM64) on Docker Hub
 - **MIT License**
 
 ## License
