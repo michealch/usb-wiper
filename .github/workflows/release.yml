@@ -6,10 +6,7 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'  # SemVer tags only: v1.2.3
 
 permissions:
-  contents: write   # Needed for GitHub Release + changelog
-  packages: write   # Needed for GHCR (optional)
-  attestations: write
-  id-token: write
+  contents: write
 
 env:
   REGISTRY: docker.io
@@ -24,7 +21,6 @@ jobs:
         with:
           fetch-depth: 0  # Full history for changelog generation
 
-      # --- Extract metadata ---
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -35,32 +31,24 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,format=short
-            # Move 'latest' to the most recent stable release
             type=semver,pattern={{version}},value=latest
           labels: |
             org.opencontainers.image.title=USB Wiper
             org.opencontainers.image.description=Secure USB device wiping tool
             org.opencontainers.image.licenses=MIT
 
-      # --- Set up QEMU for cross-platform builds ---
-      - uses: docker/setup-qemu-action@v3
-
       - uses: docker/setup-buildx-action@v3
 
-      # --- Login to Docker Hub ---
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # --- Build and push multi-arch image ---
       - name: Build and push
-        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -69,7 +57,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # --- Generate changelog from conventional commits ---
       - name: Generate changelog
         id: changelog
         uses: requarks/changelog-action@v1
@@ -79,19 +66,15 @@ jobs:
           excludeTypes: ci,docs,style,chore
           writeToFile: false
 
-      # --- Parse semver from tag ---
       - name: Parse version
         id: version
         run: |
           TAG="${{ github.ref_name }}"
-          # Strip leading 'v' if present
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          # Get major.minor for convenience
           MAJOR_MINOR="$(echo $VERSION | cut -d. -f1,2)"
           echo "major_minor=$MAJOR_MINOR" >> $GITHUB_OUTPUT
 
-      # --- Create GitHub Release ---
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:

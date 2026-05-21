@@ -11,17 +11,14 @@ permissions:
 
 jobs:
   test:
-    name: Test (Go ${{ matrix.go-version }})
+    name: Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.26', '1.25']
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.26'
 
       - name: Vet
         run: go vet ./...
@@ -49,7 +46,7 @@ jobs:
         run: file bin/usb-wiper && test -x bin/usb-wiper
 
   docker-build:
-    name: Docker build check
+    name: Docker build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +58,6 @@ jobs:
         with:
           context: .
           push: false
-          load: true
           tags: usb-wiper:ci-test
           cache-from: type=gha
           cache-to: type=gha,mode=max

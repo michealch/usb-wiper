@@ -11,7 +11,6 @@ Securely wipe USB storage devices from your browser.
 - **Web UI** — Minimal web interface with real-time progress tracking via SSE.
 - **Auto-Format** — Optional FAT32 formatting after wipe.
 - **Docker** — Runs as a single container with no external dependencies.
-- **Multi-arch** — `linux/amd64` and `linux/arm64` images available on Docker Hub.
 
 ## Quick Start
 
@@ -164,7 +163,6 @@ internal/
 - **Plain HTML5 + vanilla JS + CSS** (no frameworks)
 - **Server-Sent Events** for real-time progress
 - **Docker** with Alpine Linux
-- **Multi-arch** images (AMD64 + ARM64) on Docker Hub
 - **MIT License**
 
 ## License
