@@ -1,4 +1,14 @@
 
+## [0.5.0] - 2026-05-22
+
+
+### Added
+
+- V0.5.0 — job queue, multi-scheme wipe, presets, certificates, and redesigned UI
+
+
+
+
 ## [0.4.0] - 2026-05-22
 
 
