@@ -1,4 +1,29 @@
 
+## [0.4.0] - 2026-05-22
+
+
+### Added
+
+- Push-driven UI with wipe history persistence and random-chunk verification
+- Concise log messages with milestone-based progress reporting
+- Add non-destructive 'Test Wipe' button for read-only verification
+
+
+### Chore
+
+- Update test label for VerifyRandomChunks
+
+
+### Fixed
+
+- Allow CORS for all local network origins (10.x, 192.168.x)
+- Require privileged mode for USB hotplug in docker-compose
+- NVMe health detection and GitHub Actions checkout pin
+- Remove RELEASE_PAT token from auto-tag checkout
+
+
+
+
 ## [0.3.0] - 2026-05-21
 
 
