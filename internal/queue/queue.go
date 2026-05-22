@@ -275,18 +275,19 @@ func (q *Queue) CancelAll() int {
 	return len(toCancel)
 }
 
-// List returns all jobs (active and completed).
+// List returns copies of all jobs (active and completed).
 func (q *Queue) List() []*Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	out := make([]*Job, 0, len(q.jobs))
 	for _, j := range q.jobs {
-		out = append(out, j)
+		copy := *j
+		out = append(out, &copy)
 	}
 	return out
 }
 
-// Get returns a job by ID.
+// Get returns a copy of a job by ID.
 func (q *Queue) Get(id string) (*Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -294,7 +295,8 @@ func (q *Queue) Get(id string) (*Job, error) {
 	if !ok {
 		return nil, fmt.Errorf("job %s not found", id)
 	}
-	return j, nil
+	copy := *j
+	return &copy, nil
 }
 
 // ActiveCount returns the number of currently running jobs.
