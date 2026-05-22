@@ -1,4 +1,14 @@
 
+## [0.5.1] - 2026-05-22
+
+
+### Fixed
+
+- Use RELEASE_PAT for auto-tag push to trigger release workflow
+
+
+
+
 ## [0.5.0] - 2026-05-22
 
 
