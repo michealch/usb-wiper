@@ -13,6 +13,31 @@ import (
 	"github.com/usb-wiper/internal/device"
 )
 
+const (
+	_ = iota
+	KB = 1 << (10 * iota)
+	MB
+	GB
+)
+
+func formatBytes(n uint64) string {
+	switch {
+	case n >= GB:
+		return fmt.Sprintf("%.1f GiB", float64(n)/float64(GB))
+	case n >= MB:
+		return fmt.Sprintf("%.1f MiB", float64(n)/float64(MB))
+	case n >= KB:
+		return fmt.Sprintf("%.1f KiB", float64(n)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+// FormatBytes formats a byte count into a human-readable string.
+func FormatBytes(n uint64) string {
+	return formatBytes(n)
+}
+
 // WipeJob tracks the state of an active or completed wipe operation.
 type WipeJob struct {
 	DevicePath    string    `json:"devicePath"`
@@ -187,9 +212,14 @@ func VerifyRandomChunks(devicePath string, totalBytes, verifySize uint64, progre
 
 		totalVerified += uint64(n)
 
-		// Report verification progress
+		// Report verification progress (with message only on milestones
+		// to keep the log clean; progress bar still updates every chunk)
 		if progress != nil {
 			vPct := float64(i+1) / float64(numChunks) * 100
+			vMsg := ""
+			if i == 0 || i == numChunks-1 || (i+1)%(numChunks/5+1) == 0 {
+				vMsg = fmt.Sprintf("Verifying %s: chunk %d/%d (%.0f%% done)", devicePath, i+1, numChunks, vPct)
+			}
 			select {
 			case progress <- ProgressEvent{
 				DevicePath:   devicePath,
@@ -197,7 +227,7 @@ func VerifyRandomChunks(devicePath string, totalBytes, verifySize uint64, progre
 				Percent:      vPct,
 				BytesWritten: totalVerified,
 				TotalBytes:   verifySize,
-				Message:      fmt.Sprintf("Verifying... %.1f%% (%d/%d chunks)", vPct, i+1, numChunks),
+				Message:      vMsg,
 				Timestamp:    time.Now(),
 			}:
 			default:
@@ -232,15 +262,31 @@ func sendProgress(ch chan<- ProgressEvent, devicePath string, written, total uin
 	}
 
 	msg := ""
+	speedStr := ""
+	etaStr := ""
+	if speed > 0 {
+		speedStr = fmt.Sprintf(" @ %s/s", formatBytes(speed))
+		if eta > 0 {
+			etaStr = fmt.Sprintf(" ETA %s", eta.Round(time.Second))
+		}
+	}
+
 	switch status {
 	case "completed":
-		msg = fmt.Sprintf("Wipe completed successfully in %s", elapsed.Round(time.Second))
+		// Final event handled by the handlers layer with richer context
+		msg = fmt.Sprintf("Wiping %s: %s / %s (%.1f%%)%s%s", devicePath, formatBytes(written), formatBytes(total), pct, speedStr, etaStr)
 	case "cancelled":
-		msg = "Wipe cancelled"
+		msg = fmt.Sprintf("Wipe %s cancelled after %s (%s written)", devicePath, elapsed.Round(time.Second), formatBytes(written))
 	case "failed":
-		msg = "Wipe failed"
+		msg = fmt.Sprintf("Wipe %s failed after %s (%s written)", devicePath, elapsed.Round(time.Second), formatBytes(written))
 	default:
-		msg = fmt.Sprintf("Wiping... %.1f%%", pct)
+		// Omit message during normal progress — the per-row progress bar
+		// already shows percentage, speed, and ETA. Only emit message on
+		// 0% (start), 100% (final), and every 10% milestones to keep the
+		// log concise.
+		if written == 0 || written >= total {
+			msg = fmt.Sprintf("Wiping %s: %s / %s (%.1f%%)%s%s", devicePath, formatBytes(written), formatBytes(total), pct, speedStr, etaStr)
+		}
 	}
 
 	event := ProgressEvent{

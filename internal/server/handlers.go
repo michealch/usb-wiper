@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -326,7 +327,7 @@ func (s *Server) startDeviceWipe(devicePath string, unsafeAllowAllUSB bool, auto
 			s.sseHub.Broadcast(wipe.ProgressEvent{
 				DevicePath:   devicePath,
 				Status:       job.Status,
-				Message:      "Wipe " + job.Status + " for " + devicePath,
+				Message:      fmt.Sprintf("Wipe %s %s — %s written in %s", devicePath, job.Status, wipe.FormatBytes(job.BytesWritten), job.FinishedAt.Sub(job.StartedAt).Round(time.Second)),
 				Timestamp:    time.Now(),
 				TotalBytes:   job.TotalBytes,
 				BytesWritten: job.BytesWritten,
@@ -389,10 +390,19 @@ func (s *Server) startDeviceWipe(devicePath string, unsafeAllowAllUSB bool, auto
 		})
 
 		// Send final event
+		finalMsg := fmt.Sprintf("Wipe %s %s — %s written in %s", devicePath, job.Status, wipe.FormatBytes(job.TotalBytes), now.Sub(job.StartedAt).Round(time.Second))
+		if verified == "passed" {
+			finalMsg += fmt.Sprintf(" (verified %s)", wipe.FormatBytes(bytesVerified))
+		} else if verified == "failed" {
+			finalMsg += " (verification FAILED)"
+		}
+		if job.Error != "" {
+			finalMsg += " — " + job.Error
+		}
 		s.sseHub.Broadcast(wipe.ProgressEvent{
 			DevicePath:    devicePath,
 			Status:        job.Status,
-			Message:       "Wipe " + job.Status + " for " + devicePath,
+			Message:       finalMsg,
 			Timestamp:     time.Now(),
 			TotalBytes:    job.TotalBytes,
 			BytesWritten:  job.BytesWritten,
