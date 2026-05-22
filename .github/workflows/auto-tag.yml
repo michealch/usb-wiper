@@ -53,4 +53,4 @@ jobs:
           git add CHANGELOG.md
           git commit -m "chore: release ${{ steps.check.outputs.version }}" || true
           git tag -a ${{ steps.check.outputs.version }} -m "Release ${{ steps.check.outputs.version }}"
-          git push origin HEAD:main --tags
+          git push https://x-access-token:${{ secrets.RELEASE_PAT }}@github.com/${{ github.repository }}.git HEAD:main --tags
