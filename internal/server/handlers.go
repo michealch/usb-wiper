@@ -474,6 +474,136 @@ func (s *Server) handlePostCancel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handlePostTestWipe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Device       string `json:"device"`
+		VerifySizeGB *int   `json:"verifySizeGB"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if req.Device == "" {
+		writeError(w, http.StatusBadRequest, "device field required")
+		return
+	}
+
+	cfg := s.config.Get()
+
+	// Safety check (no write, but still validate the device)
+	if err := device.IsSafeToWipe(req.Device, cfg.UnsafeAllowAllUSB); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Check device isn't already being wiped
+	state := s.jobs.get(req.Device)
+	if state != nil && state.Job.Status == wipe.StatusRunning {
+		writeError(w, http.StatusConflict, "device is already being wiped")
+		return
+	}
+
+	verifySizeGB := cfg.VerifySizeGB
+	if req.VerifySizeGB != nil {
+		verifySizeGB = *req.VerifySizeGB
+	}
+
+	progress := make(chan wipe.ProgressEvent, 64)
+	_, cancel := context.WithCancel(context.Background())
+
+	job := &wipe.WipeJob{
+		DevicePath: req.Device,
+		Status:     wipe.StatusRunning,
+		StartedAt:  time.Now(),
+	}
+
+	state2 := &wipeJobState{
+		Job:      job,
+		progress: progress,
+		cancel:   cancel,
+	}
+
+	if err := s.jobs.set(req.Device, state2); err != nil {
+		cancel()
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	go func() {
+		defer close(progress)
+		defer cancel()
+
+		// Get device size
+		devInfo, _ := device.GetDevice(req.Device)
+		if devInfo == nil {
+			job.Status = wipe.StatusFailed
+			job.Error = "cannot determine device size"
+			job.FinishedAt = time.Now()
+			s.sseHub.Broadcast(wipe.ProgressEvent{
+				DevicePath: req.Device,
+				Status:     wipe.StatusFailed,
+				Message:    fmt.Sprintf("Test wipe %s failed: cannot determine device size", req.Device),
+				Timestamp:  time.Now(),
+			})
+			s.sendRefreshEvent()
+			return
+		}
+
+		totalBytes := devInfo.SizeBytes
+		verifySize := uint64(verifySizeGB) * 1024 * 1024 * 1024
+
+		log.Printf("test-wipe: verifying %d GiB on %s (%s)", verifySizeGB, req.Device, wipe.FormatBytes(totalBytes))
+
+		vBytes, vErr := wipe.VerifyRandomChunks(req.Device, totalBytes, verifySize, progress)
+
+		now := time.Now()
+		job.FinishedAt = now
+		job.TotalBytes = totalBytes
+
+		var msg string
+		if vErr != nil {
+			job.Status = wipe.StatusFailed
+			job.Error = vErr.Error()
+			msg = fmt.Sprintf("Test wipe %s FAILED after verifying %s: %v", req.Device, wipe.FormatBytes(vBytes), vErr)
+		} else {
+			job.Status = wipe.StatusCompleted
+			job.BytesVerified = vBytes
+			msg = fmt.Sprintf("Test wipe %s PASSED: %s of random data verified all-zero in %s", req.Device, wipe.FormatBytes(vBytes), now.Sub(job.StartedAt).Round(time.Second))
+		}
+
+		s.sseHub.Broadcast(wipe.ProgressEvent{
+			DevicePath:    req.Device,
+			Status:        job.Status,
+			Message:       msg,
+			Timestamp:     now,
+			TotalBytes:    totalBytes,
+			BytesWritten:  vBytes,
+			Percent:       100,
+			Verified:      func() string { if vErr != nil { return "failed" }; return "passed" }(),
+			BytesVerified: vBytes,
+		})
+		s.sendRefreshEvent()
+	}()
+
+	// Pipe progress to SSE hub
+	go func() {
+		for ev := range progress {
+			s.jobs.mu.Lock()
+			if s.jobs.jobs[req.Device] != nil && s.jobs.jobs[req.Device].Job == job {
+				job.BytesWritten = ev.BytesWritten
+				job.TotalBytes = ev.TotalBytes
+			}
+			s.jobs.mu.Unlock()
+			s.sseHub.Broadcast(ev)
+		}
+	}()
+
+	s.sendRefreshEvent()
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started", "device": req.Device})
+}
+
 func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	devicePath := r.URL.Query().Get("device")
 

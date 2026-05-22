@@ -124,6 +124,7 @@ But `privileged: true` ensures hotplug works without restarts.
 | GET    | `/api/health?device=X`| SMART health info        |
 | GET    | `/api/history?device=X`| Wipe history (all or per device) |
 | POST   | `/api/wipe`           | Start wipe               |
+| POST   | `/api/test-wipe`      | Test wipe (read-only verify) |
 | POST   | `/api/cancel`         | Cancel active wipe       |
 | GET    | `/api/job`            | Current job status       |
 | GET    | `/api/config`         | Get configuration        |
@@ -137,6 +138,18 @@ But `privileged: true` ensures hotplug works without restarts.
 {
   "device": "/dev/sdb",
   "autoFormat": false,
+  "verifySizeGB": 1
+}
+```
+
+### POST /api/test-wipe
+
+Non-destructive. Reads random chunks from the device and checks all bytes
+are zero — useful for confirming a previous wipe was successful.
+
+```json
+{
+  "device": "/dev/sdb",
   "verifySizeGB": 1
 }
 ```

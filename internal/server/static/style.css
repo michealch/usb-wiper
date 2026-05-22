@@ -36,7 +36,8 @@ h2 { font-size: 1.2rem; margin-bottom: 12px; color: #ccc; }
 h3 { font-size: 1.0rem; margin-bottom: 8px; color: #aaa; }
 
 /* ---- Card ---- */
-  background: var(--card);
+
+.card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 20px;
@@ -77,6 +78,8 @@ h3 { font-size: 1.0rem; margin-bottom: 8px; color: #aaa; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-danger { background: var(--danger); border-color: var(--danger); }
 .btn-cancel { background: var(--cancel-bg); border-color: #666; }
+.btn-test  { background: #2e7d32; border-color: #2e7d32; }
+.btn-cell  { display: flex; gap: 4px; }
 
 /* ---- Tables ---- */
 

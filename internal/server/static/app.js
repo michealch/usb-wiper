@@ -98,24 +98,44 @@ async function loadDevices() {
         progressCell.textContent = '—';
       }
 
-      // Wipe button cell
+      // Wipe + Test Wipe buttons
       const btnCell = row.insertCell();
-      const btn = document.createElement('button');
+      btnCell.className = 'btn-cell';
+
+      const btnWipe = document.createElement('button');
       if (d.wiping) {
-        btn.textContent = 'Cancel';
-        btn.className = 'btn btn-cancel';
-        btn.onclick = (e) => { e.stopPropagation(); cancelDeviceWipe(d.path); };
+        btnWipe.textContent = 'Cancel';
+        btnWipe.className = 'btn btn-cancel';
+        btnWipe.onclick = (e) => { e.stopPropagation(); cancelDeviceWipe(d.path); };
       } else if (d.wipeBlocked) {
-        btn.textContent = 'Blocked';
-        btn.className = 'btn';
-        btn.disabled = true;
-        btn.title = d.blockReason || '';
+        btnWipe.textContent = 'Blocked';
+        btnWipe.className = 'btn';
+        btnWipe.disabled = true;
+        btnWipe.title = d.blockReason || '';
       } else {
-        btn.textContent = 'Wipe';
-        btn.className = 'btn btn-danger';
-        btn.onclick = (e) => { e.stopPropagation(); startDeviceWipe(d.path); };
+        btnWipe.textContent = 'Wipe';
+        btnWipe.className = 'btn btn-danger';
+        btnWipe.onclick = (e) => { e.stopPropagation(); startDeviceWipe(d.path); };
       }
-      btnCell.appendChild(btn);
+      btnCell.appendChild(btnWipe);
+
+      // Test Wipe button — non-destructive verification only
+      const btnTest = document.createElement('button');
+      if (d.wiping) {
+        btnTest.textContent = '—';
+        btnTest.className = 'btn';
+        btnTest.disabled = true;
+      } else if (d.wipeBlocked) {
+        btnTest.textContent = '—';
+        btnTest.className = 'btn';
+        btnTest.disabled = true;
+      } else {
+        btnTest.textContent = 'Test';
+        btnTest.className = 'btn btn-test';
+        btnTest.title = 'Non-destructive: reads random chunks to verify all zeros';
+        btnTest.onclick = (e) => { e.stopPropagation(); startTestWipe(d.path); };
+      }
+      btnCell.appendChild(btnTest);
 
       // ---- Expanded row (health + settings + history) ----
       if (d.path === expandedDevice) {
@@ -317,6 +337,42 @@ async function startDeviceWipe(devicePath) {
   loadDevices();
 }
 
+async function startTestWipe(devicePath) {
+  const confirmed = confirm(
+    `Test wipe on ${devicePath}?\n\nThis is NON-DESTRUCTIVE — only reads random chunks\nto verify the device is all zeros.`
+  );
+  if (!confirmed) return;
+
+  const settings = perDeviceSettings[devicePath] || { autoFormat: false, verifySizeGB: 1 };
+  logMessage(`Starting test wipe on ${devicePath} (verify=${settings.verifySizeGB}GiB)...`);
+
+  deviceStates[devicePath] = { wiping: true, percent: 0, speed: 0, status: 'verifying' };
+  loadDevices();
+
+  try {
+    const res = await fetch('/api/test-wipe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        device: devicePath,
+        verifySizeGB: settings.verifySizeGB
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to start test wipe');
+    }
+
+    logMessage('Test wipe started on ' + devicePath);
+  } catch (err) {
+    logMessage('Error: ' + err.message);
+    delete deviceStates[devicePath];
+  }
+
+  loadDevices();
+}
+
 async function cancelDeviceWipe(devicePath) {
   const confirmed = confirm('Cancel wipe on ' + devicePath + '?');
   if (!confirmed) return;
@@ -447,17 +503,25 @@ function updatePerDeviceRow(devicePath) {
     }
   }
 
-  // Wipe button (cell 5)
-  if (row.cells[5] && row.cells[5].firstChild) {
-    const btn = row.cells[5].firstChild;
+  // Wipe + Test buttons (cell 5 — now has two buttons)
+  if (row.cells[5] && row.cells[5].childNodes.length >= 2) {
+    const btnWipe = row.cells[5].childNodes[0];
+    const btnTest = row.cells[5].childNodes[1];
     if (st.wiping) {
-      btn.textContent = 'Cancel';
-      btn.className = 'btn btn-cancel';
-      btn.onclick = (e) => { e.stopPropagation(); cancelDeviceWipe(devicePath); };
+      btnWipe.textContent = 'Cancel';
+      btnWipe.className = 'btn btn-cancel';
+      btnWipe.onclick = (e) => { e.stopPropagation(); cancelDeviceWipe(devicePath); };
+      btnTest.textContent = '—';
+      btnTest.className = 'btn';
+      btnTest.disabled = true;
     } else {
-      btn.textContent = 'Wipe';
-      btn.className = 'btn btn-danger';
-      btn.onclick = (e) => { e.stopPropagation(); startDeviceWipe(devicePath); };
+      btnWipe.textContent = 'Wipe';
+      btnWipe.className = 'btn btn-danger';
+      btnWipe.onclick = (e) => { e.stopPropagation(); startDeviceWipe(devicePath); };
+      btnTest.textContent = 'Test';
+      btnTest.className = 'btn btn-test';
+      btnTest.disabled = false;
+      btnTest.onclick = (e) => { e.stopPropagation(); startTestWipe(devicePath); };
     }
   }
 

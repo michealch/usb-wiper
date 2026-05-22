@@ -69,6 +69,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /api/health", s.handleGetHealth)
 	mux.HandleFunc("GET /api/history", s.handleGetHistory)
 	mux.HandleFunc("POST /api/wipe", s.handlePostWipe)
+	mux.HandleFunc("POST /api/test-wipe", s.handlePostTestWipe)
 	mux.HandleFunc("POST /api/cancel", s.handlePostCancel)
 	mux.HandleFunc("GET /api/job", s.handleGetJob)
 	mux.HandleFunc("GET /api/config", s.handleGetConfig)

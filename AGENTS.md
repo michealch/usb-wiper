@@ -39,6 +39,7 @@ wiping. Runs as a single Docker container.
 | GET    | /api/health?device=X  | SMART health                 |
 | GET    | /api/history?device=X | Wipe history (all or by device) |
 | POST   | /api/wipe             | Start wipe (device, autoFormat, verifySizeGB) |
+| POST   | /api/test-wipe        | Read-only zero verification (device, verifySizeGB) |
 | POST   | /api/cancel           | Cancel active wipe           |
 | GET    | /api/job              | Current job status           |
 | GET    | /api/config           | Get config                   |
