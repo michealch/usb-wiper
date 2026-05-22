@@ -1,4 +1,14 @@
 
+## [0.5.4] - 2026-05-22
+
+
+### Fixed
+
+- Trigger release workflow via workflow_dispatch instead of relying on tag push
+
+
+
+
 ## [0.5.3] - 2026-05-22
 
 
