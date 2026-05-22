@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -41,10 +42,14 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
-			// Allow localhost origins
-			if origin == "http://localhost:8181" ||
-				origin == "http://127.0.0.1:8181" ||
-				origin == "http://localhost" {
+			// Allow any local-origin (localhost, 127.0.0.1, 10.x, 192.168.x, etc.)
+			// since this is a local-only tool running inside Docker or directly.
+			isLocal := strings.HasPrefix(origin, "http://localhost") ||
+				strings.HasPrefix(origin, "http://127.") ||
+				strings.HasPrefix(origin, "http://10.") ||
+				strings.HasPrefix(origin, "http://192.168.") ||
+				strings.HasPrefix(origin, "http://172.")
+			if isLocal {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
