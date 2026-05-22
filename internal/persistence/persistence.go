@@ -84,11 +84,11 @@ func (s *Store) load() error {
 func (s *Store) Append(record WipeRecord) error {
 	s.mu.Lock()
 	s.records = append(s.records, record)
-	records := make([]WipeRecord, len(s.records))
-	copy(records, s.records)
+	// Save while holding the lock to prevent concurrent writes from
+	// racing on the temp-file + rename.
+	err := s.save()
 	s.mu.Unlock()
-
-	return s.save(records)
+	return err
 }
 
 // UpdateByDevice finds a record by device path (matching the latest) and
@@ -103,15 +103,15 @@ func (s *Store) UpdateByDevice(devicePath string, fn func(*WipeRecord)) error {
 			break
 		}
 	}
-	records := make([]WipeRecord, len(s.records))
-	copy(records, s.records)
-	s.mu.Unlock()
 
 	if !found {
+		s.mu.Unlock()
 		return fmt.Errorf("no record found for %s", devicePath)
 	}
 
-	return s.save(records)
+	err := s.save()
+	s.mu.Unlock()
+	return err
 }
 
 // GetAll returns a copy of all wipe records (newest first).
@@ -140,21 +140,53 @@ func (s *Store) GetLatest(devicePath string) *WipeRecord {
 }
 
 // save atomically writes records to the history file using a temp file + rename.
-func (s *Store) save(records []WipeRecord) error {
-	dir := s.dataDir
-	tmpFile := filepath.Join(dir, ".history.tmp")
-
-	data, err := json.MarshalIndent(records, "", "  ")
+// Caller must hold s.mu.
+func (s *Store) save() error {
+	data, err := json.MarshalIndent(s.records, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
+	data = append(data, '\n')
 
-	if err := os.WriteFile(tmpFile, append(data, '\n'), 0644); err != nil {
-		return fmt.Errorf("write tmp: %w", err)
+	// Use a unique temp file name to prevent concurrent writers from
+	// corrupting each other (s.mu serializes writes, but CreateTemp is
+	// the safe pattern).
+	dir := s.dataDir
+	tmp, err := os.CreateTemp(dir, "history-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("write temp: %w", err)
 	}
 
-	if err := os.Rename(tmpFile, s.filePath()); err != nil {
+	// Sync the temp file before rename for crash safety
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("sync temp: %w", err)
+	}
+
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("close temp: %w", err)
+	}
+
+	// Atomic rename
+	dest := s.filePath()
+	if err := os.Rename(tmpName, dest); err != nil {
+		os.Remove(tmpName)
 		return fmt.Errorf("rename: %w", err)
+	}
+
+	// Sync the directory to ensure the rename is durable
+	if dirFd, err := os.Open(dir); err == nil {
+		dirFd.Sync()
+		dirFd.Close()
 	}
 
 	return nil

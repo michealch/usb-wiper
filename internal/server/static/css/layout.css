@@ -1,0 +1,98 @@
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--font-sans);
+  background:var(--color-bg);
+  color:var(--color-text);
+  line-height:1.6;
+  overflow:hidden;
+}
+.app-shell{
+  display:grid;
+  grid-template-areas:"sidebar topbar" "sidebar main" "log log";
+  grid-template-columns:var(--sidebar-width) 1fr;
+  grid-template-rows:var(--topbar-height) 1fr var(--log-height);
+  height:100vh;
+}
+.topbar{
+  grid-area:topbar;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:0 var(--space-5);
+  background:var(--color-surface);
+  border-bottom:1px solid var(--color-border);
+  z-index:10;
+}
+.topbar-left{display:flex;align-items:center;gap:var(--space-3);}
+.topbar-logo{font-size:1.1rem;font-weight:700;color:var(--color-accent);}
+.topbar-status{font-size:.82rem;color:var(--color-text-dim);}
+.topbar-right{display:flex;align-items:center;gap:var(--space-3);}
+.topbar-btn{
+  background:none;border:none;color:var(--color-text-dim);
+  font-size:1.1rem;cursor:pointer;padding:var(--space-1) var(--space-2);
+  border-radius:var(--radius-sm);transition:color .15s,background .15s;
+  line-height:1;
+}
+.topbar-btn:hover{color:var(--color-text);background:var(--color-surface-2);}
+.sidebar{
+  grid-area:sidebar;
+  background:var(--color-surface);
+  border-right:1px solid var(--color-border);
+  display:flex;flex-direction:column;
+  padding:var(--space-3) 0;
+  overflow-y:auto;
+  z-index:20;
+}
+.sidebar-nav{display:flex;flex-direction:column;gap:var(--space-1);padding:0 var(--space-2);}
+.sidebar-link{
+  display:flex;align-items:center;gap:var(--space-3);
+  padding:var(--space-2) var(--space-3);border-radius:var(--radius-sm);
+  color:var(--color-text-dim);text-decoration:none;font-size:.9rem;
+  transition:color .15s,background .15s;
+  border:none;background:none;cursor:pointer;width:100%;text-align:left;
+  font-family:var(--font-sans);
+}
+.sidebar-link:hover{color:var(--color-text);background:var(--color-surface-2);}
+.sidebar-link.active{color:var(--color-accent);background:var(--color-surface-2);font-weight:600;}
+.sidebar-icon{font-size:1.1rem;width:22px;text-align:center;flex-shrink:0;}
+.sidebar-badge{
+  margin-left:auto;font-size:.72rem;background:var(--color-accent);
+  color:#fff;padding:1px 7px;border-radius:10px;min-width:20px;text-align:center;
+}
+.main{
+  grid-area:main;
+  overflow-y:auto;
+  padding:var(--space-5);
+}
+.view{display:none}
+.view.active{display:block}
+.event-log{
+  grid-area:log;
+  background:var(--color-surface);
+  border-top:1px solid var(--color-border);
+  display:flex;flex-direction:column;
+}
+.log-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:var(--space-2) var(--space-4);font-size:.78rem;
+  color:var(--color-text-dim);font-weight:600;
+  border-bottom:1px solid var(--color-border);
+}
+.log-body{
+  flex:1;overflow-y:auto;padding:var(--space-2) var(--space-4);
+  font-family:var(--font-mono);font-size:.75rem;white-space:pre-wrap;
+  color:var(--color-text-dim);
+}
+.log-entry{display:flex;gap:var(--space-2);padding:1px 0}
+.log-entry .ts{color:var(--color-text-dim);flex-shrink:0}
+.log-entry .msg{color:var(--color-text)}
+.card{
+  background:var(--color-surface);border:1px solid var(--color-border);
+  border-radius:var(--radius-md);padding:var(--space-5);margin-bottom:var(--space-4);
+}
+.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-4);}
+.card-header h2{font-size:1.1rem;font-weight:600;}
+.card-header h3{font-size:.95rem;font-weight:600;}
+@media(max-width:1024px){.app-shell{grid-template-columns:var(--sidebar-collapsed) 1fr}.sidebar-link span:not(.sidebar-icon){display:none}.sidebar-link{gap:0;justify-content:center;padding:var(--space-2) var(--space-1)}}
+@media(max-width:720px){.app-shell{grid-template-columns:1fr;grid-template-areas:"topbar" "main" "log";grid-template-rows:var(--topbar-height) 1fr var(--log-height)}.sidebar{display:none}.sidebar.open{display:flex;position:fixed;top:0;left:0;bottom:0;z-index:50;width:var(--sidebar-width)}}

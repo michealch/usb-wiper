@@ -104,11 +104,8 @@ func probeDevice(name string) (*Device, error) {
 	// Check if USB
 	isUSB := isUSBDevice(base)
 
-	// Read model
-	model := readSysfsString(filepath.Join(base, "device"), "model")
-
-	// Read serial
-	serial := readSysfsString(filepath.Join(base, "device"), "serial")
+	// Read model and serial: prefer smartctl, fall back to sysfs
+	model, serial := readDeviceIdentity(name)
 
 	// Read size (in 512-byte sectors)
 	size := readSysfsUint64(base, "size")
@@ -129,6 +126,34 @@ func probeDevice(name string) (*Device, error) {
 	}
 
 	return dev, nil
+}
+
+// readDeviceIdentity obtains model and serial for a device, using smartctl
+// as the primary source and falling back to sysfs when smartctl is unavailable
+// or returns empty values.
+func readDeviceIdentity(devName string) (model, serial string) {
+	devicePath := "/dev/" + devName
+	smartModel, smartSerial := GetSmartIdentity(devicePath)
+
+	// Sysfs fallback values
+	base := filepath.Join("/sys/block", devName)
+	sysfsModel := readSysfsString(filepath.Join(base, "device"), "model")
+	sysfsSerial := readSysfsString(filepath.Join(base, "device"), "serial")
+
+	// Prefer smartctl values when available, fall back to sysfs
+	if smartModel != "" {
+		model = smartModel
+	} else {
+		model = sysfsModel
+	}
+
+	if smartSerial != "" {
+		serial = smartSerial
+	} else {
+		serial = sysfsSerial
+	}
+
+	return
 }
 
 func isUSBDevice(sysBlockPath string) bool {

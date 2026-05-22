@@ -27,15 +27,72 @@ type Health struct {
 	Raw                 map[string]interface{} `json:"raw"`
 }
 
-// deviceTypes to try with smartctl -d when auto-detect fails.
+// smartDeviceTypes is the ordered list of -d flags to try with smartctl.
 // These cover common USB bridge chips for NVMe and SATA devices.
-var deviceTypes = []string{
+var smartDeviceTypes = []string{
 	"",           // auto-detect (try first)
 	"sat,12",     // SAT passthrough (ASMedia, common USB-SATA/USB-NVMe bridges)
 	"sat,16",     // SAT passthrough 16-byte CDB
 	"sntasmedia", // ASMedia NVMe bridges
 	"sntjmicron", // JMicron NVMe bridges
 	"sntrealtek", // Realtek NVMe bridges
+}
+
+// GetSmartIdentity tries to read model name and serial number via smartctl.
+// Returns empty strings on failure (caller should fall back to sysfs).
+// Uses a short timeout to avoid blocking device enumeration.
+func GetSmartIdentity(devicePath string) (model, serial string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	for _, dt := range smartDeviceTypes {
+		args := []string{"-i", "-j"}
+		if dt != "" {
+			args = append(args, "-d", dt)
+		}
+		args = append(args, devicePath)
+
+		cmd := exec.CommandContext(ctx, "smartctl", args...)
+		output, err := cmd.Output()
+		if err != nil || len(output) == 0 {
+			continue
+		}
+
+		var raw map[string]interface{}
+		if json.Unmarshal(output, &raw) != nil {
+			continue
+		}
+
+		// Extract model and serial from JSON
+		if m, ok := raw["model_name"].(string); ok && m != "" {
+			model = m
+		}
+		// Also check "device" -> "model" for USB bridges
+		if model == "" {
+			if dev, ok := raw["device"].(map[string]interface{}); ok {
+				if m, ok := dev["model"].(string); ok {
+					model = m
+				}
+			}
+		}
+
+		if s, ok := raw["serial_number"].(string); ok && s != "" {
+			serial = s
+		}
+
+		// If we got at least something, return it
+		if model != "" || serial != "" {
+			return
+		}
+
+		// Even without model/serial keys, if we got valid JSON with
+		// some device info, stop trying more -d flags
+		if hasAnyField(raw, "model_name", "model_family", "device", "firmware_version") {
+			return
+		}
+	}
+
+	return "", ""
 }
 
 // GetHealth retrieves SMART health information for a device.
@@ -48,7 +105,7 @@ func GetHealth(devicePath string) (*Health, error) {
 	var lastOutput []byte
 	var lastErr error
 
-	for _, dt := range deviceTypes {
+	for _, dt := range smartDeviceTypes {
 		args := []string{"-a", "-j"}
 		if dt != "" {
 			args = append(args, "-d", dt)

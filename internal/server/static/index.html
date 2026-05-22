@@ -1,47 +1,72 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>USB Wiper</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/layout.css">
+  <link rel="stylesheet" href="/static/css/components.css">
 </head>
 <body>
-  <div class="container">
-    <h1>USB Wiper</h1>
-
-    <section id="warning">
-      <span class="icon">⚠</span> DESTROYS ALL DATA on selected device. Cannot be undone.
-    </section>
-
-    <section id="devices" class="card">
-      <h2>Devices</h2>
-      <div class="card-header-row">
-        <button id="refresh" class="btn">Refresh</button>
-        <button id="cancel-all" class="btn btn-danger" disabled>Cancel All</button>
+  <div class="app-shell">
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="topbar-logo">💾 USB Wiper</span>
+        <span class="topbar-status" id="topbar-title">Dashboard</span>
       </div>
-      <table id="device-table">
-        <thead>
-          <tr>
-            <th>Path</th>
-            <th>Model</th>
-            <th>Size</th>
-            <th>Status</th>
-            <th>Progress</th>
-            <th>Wipe</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-      <p id="no-devices" class="muted">No USB devices detected. Insert a USB drive and click Refresh.</p>
-    </section>
+      <div class="topbar-right">
+        <button class="topbar-btn" id="btn-refresh-all" title="Refresh">🔄</button>
+        <button class="topbar-btn" id="btn-theme-toggle" title="Toggle theme">🌓</button>
+      </div>
+    </header>
 
-    <section id="log-section" class="card">
-      <h2>Log</h2>
-      <pre id="log"></pre>
-    </section>
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="sidebar-nav">
+        <a class="sidebar-link active" data-route="dashboard" href="#/dashboard">
+          <span class="sidebar-icon">📊</span> <span>Dashboard</span>
+        </a>
+        <a class="sidebar-link" data-route="devices" href="#/devices">
+          <span class="sidebar-icon">💾</span> <span>Devices</span>
+        </a>
+        <a class="sidebar-link" data-route="queue" href="#/queue">
+          <span class="sidebar-icon">⏳</span> <span>Queue</span>
+          <span class="sidebar-badge" id="queue-badge" style="display:none">0</span>
+        </a>
+        <a class="sidebar-link" data-route="history" href="#/history">
+          <span class="sidebar-icon">📜</span> <span>History</span>
+        </a>
+        <a class="sidebar-link" data-route="presets" href="#/presets">
+          <span class="sidebar-icon">📋</span> <span>Presets</span>
+        </a>
+        <a class="sidebar-link" data-route="settings" href="#/settings">
+          <span class="sidebar-icon">⚙️</span> <span>Settings</span>
+        </a>
+      </div>
+    </nav>
+
+    <!-- Main content -->
+    <main class="main">
+      <div class="view active" id="view-dashboard"><p class="muted">Loading...</p></div>
+      <div class="view" id="view-devices"><p class="muted">Loading...</p></div>
+      <div class="view" id="view-queue"><p class="muted">Loading...</p></div>
+      <div class="view" id="view-history"><p class="muted">Loading...</p></div>
+      <div class="view" id="view-presets"><p class="muted">Loading...</p></div>
+      <div class="view" id="view-settings"><p class="muted">Loading...</p></div>
+    </main>
+
+    <!-- Event log -->
+    <div class="event-log">
+      <div class="log-header">
+        <span>Event Log</span>
+        <button class="btn btn-ghost btn-sm" id="btn-clear-log">Clear</button>
+      </div>
+      <div class="log-body" id="log-body"></div>
+    </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

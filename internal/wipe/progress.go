@@ -8,13 +8,15 @@ import (
 // When EventType is "refresh", other fields may be unset — the frontend should
 // reload /api/devices and /api/history.
 type ProgressEvent struct {
-	EventType     string        `json:"eventType,omitempty"` // "progress", "refresh" (empty = progress)
+	EventType     string        `json:"eventType,omitempty"` // "progress", "refresh", "job" (empty = progress)
 	DevicePath    string        `json:"devicePath"`
 	BytesWritten  uint64        `json:"bytesWritten"`
 	TotalBytes    uint64        `json:"totalBytes"`
 	Percent       float64       `json:"percent"`
 	Speed         uint64        `json:"speed"` // bytes per second
 	ETA           time.Duration `json:"eta"`
+	CurrentPass   int           `json:"currentPass"`   // which pass (1-based) for multi-pass schemes
+	TotalPasses   int           `json:"totalPasses"`   // total passes for this scheme
 	Status        string        `json:"status"`
 	Message       string        `json:"message"`
 	Timestamp     time.Time     `json:"timestamp"`

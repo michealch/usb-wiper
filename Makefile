@@ -1,4 +1,4 @@
-.PHONY: help build run test test-verbose fmt lint vet tidy \
+.PHONY: help build run test test-verbose test-race test-norace fmt lint vet tidy \
         docker-build dev dev-detached prod stop logs shell clean
 
 APP        := usb-wiper
@@ -32,6 +32,9 @@ run: build
 
 test:
 	go test ./... -race -count=1
+
+test-norace:
+	go test ./... -count=1
 
 test-verbose:
 	go test -v ./... -race -count=1

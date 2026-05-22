@@ -6,15 +6,22 @@ Securely wipe USB storage devices from your browser.
 
 ## Features
 
-- **Secure Wipe** — Single-pass zero write across the entire USB device with random-chunk verification.
-- **Verification** — Reads random 1 MiB chunks (configurable 0–4 GiB) from the wiped device to confirm all zeros.
-- **Wipe History** — Persistent JSON-backed log of all wipe operations with status and verification results.
-- **Multi-Device** — Concurrent wipe support with per-device progress bars in the UI.
-- **SMART Health** — Display device health information (power-on hours, temperature, reallocated sectors, etc.)
-- **Real-time UI** — Push-driven via Server-Sent Events (SSE). No page polling. Progress updates, device plug/unplug detection, and history changes are delivered in real time.
-- **Expandable Rows** — Click any device to expand and see health info, per-device wipe settings (auto-format, verify size), and wipe history.
+- **Multi-Scheme Wipe** — Choose from Zero Fill, Random Fill, DoD 5220.22-M 3-pass, NIST 800-88 Clear, and ATA Secure Erase.
+- **Job Queue** — Queue multiple devices with configurable concurrency (default 2 simultaneous wipes). ULID-based job tracking.
+- **Multi-Pass Progress** — Per-pass progress bars for multi-pass schemes (e.g. Pass 2/3).
+- **Wipe Presets** — Named, reusable wipe configurations (scheme, auto-format, verify size, label template). Built-in presets: Quick Zero, Standard Sanitize, DoD 3-Pass, Paranoid.
+- **Certificates of Erasure** — Tamper-evident PDF and JSON certificates signed with Ed25519. Verify certificates offline.
+- **Audit Log** — Append-only JSON audit trail of all user actions and security events.
+- **Device Fingerprinting** — SHA-256 hash of pre/post wipe device state for cryptographic evidence.
+- **Wipe History** — Persistent JSON-backed log with verification results.
+- **SMART Health** — NVMe and ATA health info via smartctl with multi-bridge auto-detection.
+- **Real-time UI** — Redesigned sidebar layout with dashboard, devices view with drawer, queue panel, history viewer, presets editor, and settings page. Dark/light themes.
+- **Server-Sent Events** — Push-driven progress updates, device plug/unplug detection.
 - **Auto-Format** — Optional FAT32 formatting after wipe.
-- **Docker** — Runs as a single container, Debian stable-slim base.
+- **Scheduled Wipes** — Planned: cron-based and device-insert triggers (endpoint temporarily disabled; real cron parser in progress).
+- **Webhook Notifications** — POST webhook on job completion.
+- **Prometheus Metrics** — `/metrics` endpoint with counters and gauges.
+- **Docker** — Single container, Debian stable-slim base.
 
 ## Quick Start
 
@@ -31,11 +38,7 @@ docker run --rm -it --privileged \
 
 Open [http://localhost:8181](http://localhost:8181) in your browser.
 
-Available image tags: `latest`, `v0.1.0`, `0.1`, `0`
-
 ### Option 2: Docker compose
-
-Create a `docker-compose.yml`:
 
 ```yaml
 services:
@@ -51,6 +54,7 @@ services:
       - "8181:8181"
     environment:
       - UNSAFE_ALLOW_ALL_USB=1
+      - ALLOW_HARDWARE_SECURE_ERASE=1
       - LOG_LEVEL=info
     restart: unless-stopped
 ```
@@ -70,134 +74,147 @@ make prod
 ### Option 4: Run without Docker (Linux only)
 
 ```bash
-# Requirements: Go 1.26+, smartmontools, dosfstools, parted, util-linux
-
 make build
 sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 ```
 
 ## Environment Variables
 
-| Variable                | Default | Description                                                        |
-|-------------------------|---------|--------------------------------------------------------------------|
-| `PORT`                  | `8181`  | HTTP port the server listens on                                    |
-| `LOG_LEVEL`             | `info`  | Log level: `debug`, `info`, `warn`, `error`                        |
-| `DATA_DIR`              | `/data` | Directory for persistent wipe history (`history.json`)             |
-| `UNSAFE_ALLOW_ALL_USB`  | (unset) | Set to `1` to skip the removable-device check for USB SSDs/enclosures |
-
-### When to use `UNSAFE_ALLOW_ALL_USB=1`
-
-Some USB SSD enclosures (especially UASP-capable ones) report `removable=0` in sysfs even though they're physically connected via USB. When this happens, the device appears in the list but shows "⚠ Blocked" and cannot be wiped. Set `UNSAFE_ALLOW_ALL_USB=1` to bypass only the removable flag check. **All other safety checks remain active** (USB bus, system mount points, root device, size limit, etc.).
-
-## ⚠️ Safety Warnings
-
-- **THIS TOOL DESTROYS ALL DATA** on the selected USB device. Recovery is impossible.
-- **Only USB devices** are shown. System disks (NVMe, SATA, etc.) are filtered.
-- The application performs **9 independent safety checks** before allowing any destructive operation:
-  1. Path must match `/dev/sd[a-z]`
-  2. Device must exist
-  3. Must be a block device
-  4. Must not be NVMe
-  5. Must not be the root device
-  6. Must be marked as removable (skipped when `UNSAFE_ALLOW_ALL_USB=1`)
-  7. Must be on a USB bus
-  8. Must not be mounted at a system path (`/`, `/boot`, `/home`, `/var`, `/usr`, `/etc`)
-  9. Size must be ≤ 2 TB
-- **Run inside Docker** for additional isolation.
-- **Do not use on production servers** unless you fully understand the risks.
-
-## Docker Requirements
-
-`privileged: true` (or `--privileged`) is **required**. Without it:
-- USB devices plugged in after container start won't get device nodes (`/dev/sdX`).
-- The safety check will fail with "device does not exist".
-- The container needs full `/dev` access for block device I/O and new device nodes.
-
-If you restart the container after plugging in new devices, they will appear.
-But `privileged: true` ensures hotplug works without restarts.
+| Variable                       | Default          | Description |
+|-------------------------------|------------------|-------------|
+| `PORT`                        | `8181`           | HTTP port |
+| `LOG_LEVEL`                   | `info`           | Log level: `debug`, `info`, `warn`, `error` |
+| `DATA_DIR`                    | `/data`          | Data directory for history, presets, settings, certificates, audit log |
+| `METRICS_BIND`                | `127.0.0.1:9090` | Prometheus metrics listen address (set to `off` to disable) |
+| `UNSAFE_ALLOW_ALL_USB`        | (unset)          | Skip removable-device check for USB SSDs/enclosures |
+| `ALLOW_HARDWARE_SECURE_ERASE` | (unset)          | Enable ATA Secure Erase / NVMe Format scheme |
+| `UNSAFE_ALLOW_PRIVATE_WEBHOOKS` | (unset)        | Allow webhook URLs pointing to private/internal IPs |
 
 ## API Reference
 
-| Method | Path                  | Description              |
-|--------|-----------------------|--------------------------|
-| GET    | `/api/devices`        | List USB devices         |
-| GET    | `/api/health?device=X`| SMART health info        |
-| GET    | `/api/history?device=X`| Wipe history (all or per device) |
-| POST   | `/api/wipe`           | Start wipe               |
-| POST   | `/api/test-wipe`      | Test wipe (read-only verify) |
-| POST   | `/api/cancel`         | Cancel active wipe       |
-| GET    | `/api/job`            | Current job status       |
-| GET    | `/api/config`         | Get configuration        |
-| POST   | `/api/config`         | Update configuration     |
-| GET    | `/api/events`         | SSE progress stream      |
-| GET    | `/healthz`            | Health check             |
+### Device & Health
+
+| Method | Path                  | Description |
+|--------|-----------------------|-------------|
+| GET    | `/api/devices`        | List USB devices with status |
+| GET    | `/api/health?device=X`| SMART health info |
+
+### Wipe Operations
+
+| Method | Path                  | Description |
+|--------|-----------------------|-------------|
+| POST   | `/api/wipe`           | Start wipe (supports multi-device, scheme, preset) |
+| POST   | `/api/test-wipe`      | Read-only verification |
+| POST   | `/api/cancel`         | Cancel by device or all |
+
+### Jobs
+
+| Method | Path                  | Description |
+|--------|-----------------------|-------------|
+| GET    | `/api/jobs`           | List all jobs |
+| GET    | `/api/jobs/{id}`      | Get single job |
+| POST   | `/api/jobs/{id}/cancel`| Cancel specific job |
+
+### Schemes & Presets
+
+| Method | Path                  | Description |
+|--------|-----------------------|-------------|
+| GET    | `/api/schemes`        | List wipe schemes |
+| GET    | `/api/presets`        | List presets |
+| POST   | `/api/presets`        | Create preset |
+| PUT    | `/api/presets/{id}`   | Update preset |
+| DELETE | `/api/presets/{id}`   | Delete preset |
+
+### Settings
+
+| Method | Path                  | Description |
+|--------|-----------------------|-------------|
+| GET    | `/api/settings`       | Get settings |
+| PUT    | `/api/settings`       | Update settings |
+| GET    | `/api/config`         | Get config (backward compat) |
+| POST   | `/api/config`         | Update config (backward compat) |
+
+### Certificates
+
+| Method | Path                  | Description |
+|--------|-----------------------|-------------|
+| GET    | `/api/cert/pubkey`    | Get Ed25519 public key |
+| GET    | `/api/cert/{jobId}/json`| Download JSON certificate |
+| GET    | `/api/cert/{jobId}/pdf` | Download PDF certificate |
+| POST   | `/api/cert/verify`    | Verify certificate signature |
+
+### Audit & Observability
+
+| Method | Path                  | Description |
+|--------|-----------------------|-------------|
+| GET    | `/api/audit`          | Read audit log |
+| GET    | `/metrics`            | Prometheus metrics |
+| GET    | `/healthz`            | Liveness probe |
+| GET    | `/api/events`         | SSE stream |
+
+### History
+
+| Method | Path                   | Description |
+|--------|------------------------|-------------|
+| GET    | `/api/history?device=X`| Wipe history |
 
 ### POST /api/wipe
 
 ```json
 {
-  "device": "/dev/sdb",
-  "autoFormat": false,
-  "verifySizeGB": 1
+  "devices": ["/dev/sdb", "/dev/sdc"],
+  "schemeId": "dod-3pass",
+  "presetId": "optional-preset-id",
+  "autoFormat": true,
+  "verifySizeGB": 4,
+  "label": "RMA-2026-05"
 }
 ```
 
-### POST /api/test-wipe
+## Wipe Schemes
 
-Non-destructive. Reads random chunks from the device and checks all bytes
-are zero — useful for confirming a previous wipe was successful.
+| ID            | Name                       | Passes | Description |
+|---------------|----------------------------|--------|-------------|
+| `zero`        | Zero Fill                  | 1      | Single pass of zeros — fast, effective |
+| `random`      | Random Fill                | 1      | Single pass of crypto-random data |
+| `dod-3pass`   | DoD 5220.22-M 3-Pass       | 3      | Zeros, 0xFF, random — historically classified |
+| `nist-clear`  | NIST 800-88 Clear          | 1      | Zero pass with NIST-compliant metadata |
+| `secure-erase`| ATA Secure Erase / NVMe Format | 1  | Firmware-level sanitize (requires `ALLOW_HARDWARE_SECURE_ERASE=1`) |
 
-```json
-{
-  "device": "/dev/sdb",
-  "verifySizeGB": 1
-}
-```
+## Safety Checks (MUST NOT BE MODIFIED)
 
-### SSE Event Types
+All 9 checks run before every destructive operation:
 
-The `/api/events` SSE stream delivers two event types:
-
-| eventType   | Trigger | Frontend action |
-|-------------|---------|-----------------|
-| *(empty/"progress")* | Wipe progress | Update per-row progress bar + status badge |
-| `"refresh"` | Wipe start/complete/cancel, or device plug/unplug detected | Full device list + history reload |
-
-The server scans for device changes every 3 seconds and broadcasts a refresh
-event when USB devices are plugged or unplugged.
-
-### Random-Chunk Verification
-
-After wiping, the server reads random 1 MiB chunks across the device and
-checks every byte is zero. Configure the total verification size (0–4 GiB)
-via the UI dropdown or the `verifySizeGB` config field. Set to 0 to disable.
-
-### Wipe History
-
-All wipe operations are recorded in `$DATA_DIR/history.json` (default `/data`).
-History persists across container restarts when a volume is mounted.
-View history in the web UI or via `GET /api/history`.
+1. Path must match `/dev/sd[a-z]`
+2. Device must exist
+3. Must be a block device
+4. Must not be NVMe
+5. Must not be the root device
+6. Must be marked as removable (skipped when `UNSAFE_ALLOW_ALL_USB=1`)
+7. Must be on a USB bus
+8. Must not be mounted at system paths (`/`, `/boot`, `/home`, `/var`, `/usr`, `/etc`)
+9. Size must be ≤ 2 TB
 
 ## Development
 
 ```bash
-# Requirements: Go 1.26+, Docker, docker compose v2
-
-make build        # Build local binary
-make test         # Run tests with race detector
-make test-verbose # Run tests with verbose output
-make fmt          # Format code
-make vet          # Run go vet
-make lint         # Run linter (requires golangci-lint)
-make tidy         # Run go mod tidy
-make dev          # Dev server with hot reload
-make docker-build # Build Docker image
-make docker-run   # Build and run Docker image
-make prod         # Production deployment
-make stop         # Stop all compose services
-make logs         # Tail container logs
-make shell        # Shell into running container
-make clean        # Remove build artifacts
+make build          # Build local binary
+make run            # Run locally (requires sudo)
+make test           # Run tests with race detector
+make test-verbose   # Verbose tests with race detector
+make test-norace    # Run tests without race detector
+make fmt            # Format code
+make vet            # Run go vet
+make lint           # Linter (requires golangci-lint)
+make tidy           # Go mod tidy
+make dev            # Dev compose with hot reload (air)
+make dev-detached   # Dev compose in background
+make docker-build   # Build production Docker image
+make prod           # Production compose (detached)
+make stop           # Stop all compose services
+make logs           # Tail dev container logs
+make shell          # Shell into dev container
+make clean          # Remove build artifacts
 ```
 
 ## Architecture
@@ -205,25 +222,28 @@ make clean        # Remove build artifacts
 ```
 cmd/usb-wiper/         → Entry point
 internal/
+  audit/               → Append-only audit log (JSON lines)
+  cert/                → Ed25519-signed certificates (PDF + JSON)
+  config/              → In-memory + persisted settings
   device/              → USB detection, safety checks, SMART
-  wipe/                → Zero-write engine, progress tracking
   format/              → FAT32 formatting
-  config/              → In-memory configuration
+  metrics/             → Prometheus metrics registry
+  notify/              → Webhook notifications
   persistence/         → JSON wipe history store (atomic writes)
-  server/              → HTTP server, SSE hub, handlers
-  server/static/       → Embedded web UI (HTML, CSS, JS)
+  presets/             → Named reusable wipe presets
+  queue/               → FIFO job queue with concurrency control
+  scheduler/           → Cron/device-insert wipe scheduler
+  server/              → HTTP server, SSE hub, all handlers
+  server/static/       → Embedded web UI (ES modules, dark/light themes)
+  ulid/                → ULID generator (stdlib-only)
+  wipe/                → Multi-scheme wipe engine + verification
 ```
 
-## Technology Stack
+## Tech Stack
 
-- **Go 1.26+** (stdlib only, no external dependencies)
-- **Plain HTML5 + vanilla JS + CSS** (no frameworks)
+- **Go 1.26+** (stdlib only)
+- **Vanilla HTML5 + ES modules + CSS custom properties** (no frameworks, no build step)
 - **Server-Sent Events** for real-time progress
 - **Docker** with Debian stable-slim
-- **Renovate** bot for automated Go and base image updates
-- **git-cliff** for changelog generation
+- **Ed25519** signing for certificates
 - **MIT License**
-
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.

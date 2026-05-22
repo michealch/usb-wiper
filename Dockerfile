@@ -20,6 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     util-linux \
     e2fsprogs \
     wget \
+    hdparm \
+    nvme-cli \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/usb-wiper /usr/local/bin/usb-wiper

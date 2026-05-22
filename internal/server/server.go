@@ -7,28 +7,42 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/usb-wiper/internal/audit"
+	cert2 "github.com/usb-wiper/internal/cert"
 	"github.com/usb-wiper/internal/config"
 	"github.com/usb-wiper/internal/device"
+	"github.com/usb-wiper/internal/metrics"
 	"github.com/usb-wiper/internal/persistence"
+	"github.com/usb-wiper/internal/presets"
+	"github.com/usb-wiper/internal/queue"
+	"github.com/usb-wiper/internal/scheduler"
 	"github.com/usb-wiper/internal/wipe"
 )
 
-//go:embed static/*
+//go:embed all:static
 var staticFiles embed.FS
 
 // Server is the main HTTP server for the USB Wiper application.
 type Server struct {
-	port    string
-	config  *config.Manager
-	sseHub  *SSEHub
-	jobs    *jobManager
-	history *persistence.Store
-	server  *http.Server
+	port      string
+	config    *config.Manager
+	sseHub    *SSEHub
+	jobs      *queue.Queue
+	history   *persistence.Store
+	presets   *presets.Store
+	schemes   *wipe.SchemeRegistry
+	signer    *cert2.Signer
+	auditLog  *audit.Logger
+	metrics   *metrics.Registry
+	scheduler *scheduler.Manager
+	server    *http.Server
 }
 
 // New creates a new Server instance.
@@ -36,16 +50,70 @@ func New(port string, unsafeAllowAllUSB bool, dataDir string) *Server {
 	history, err := persistence.New(dataDir)
 	if err != nil {
 		log.Printf("WARNING: failed to initialize history store: %v (wipes will not be persisted)", err)
-		// Create a minimal in-memory-only store
 		history, _ = persistence.New("")
 	}
 
+	presetStore, err := presets.New(dataDir)
+	if err != nil {
+		log.Printf("WARNING: failed to initialize presets: %v", err)
+		presetStore, _ = presets.New("")
+	}
+
+	schemeReg := wipe.NewSchemeRegistry()
+	sseHub := NewSSEHub()
+
+	jobs := queue.New(queue.Config{
+		MaxParallel: 2,
+		SSEHub:      sseHub,
+		History:     history,
+		Schemes:     schemeReg,
+		UnsafeAllow: unsafeAllowAllUSB,
+	})
+
+	cfg := config.New(unsafeAllowAllUSB, dataDir)
+
+	signer, err := cert2.NewSigner(dataDir)
+	if err != nil {
+		log.Printf("WARNING: failed to initialize cert signer: %v (certificates will not be signed)", err)
+	}
+
+	auditLog, err := audit.New(dataDir)
+	if err != nil {
+		log.Printf("WARNING: failed to initialize audit log: %v", err)
+	}
+
+	// Log server start
+	if auditLog != nil {
+		auditLog.Log(audit.Event{
+			Event: "server_start",
+			Actor: "system",
+		})
+	}
+
+	metricsReg := metrics.New()
+	metricsReg.NewCounter("usb_wiper_wipes_total", "Total number of wipe jobs started")
+	metricsReg.NewCounter("usb_wiper_wipes_completed", "Total number of wipe jobs completed successfully")
+	metricsReg.NewCounter("usb_wiper_wipes_failed", "Total number of wipe jobs that failed")
+	metricsReg.NewGauge("usb_wiper_jobs_running", "Number of currently running wipe jobs")
+	metricsReg.NewGauge("usb_wiper_jobs_queued", "Number of queued wipe jobs")
+
+	schedMgr, err := scheduler.New(dataDir, nil)
+	if err != nil {
+		log.Printf("WARNING: failed to initialize scheduler: %v", err)
+	}
+
 	return &Server{
-		port:    port,
-		config:  config.New(unsafeAllowAllUSB),
-		sseHub:  NewSSEHub(),
-		jobs:    newJobManager(),
-		history: history,
+		port:      port,
+		config:    cfg,
+		sseHub:    sseHub,
+		jobs:      jobs,
+		history:   history,
+		presets:   presetStore,
+		schemes:   schemeReg,
+		signer:    signer,
+		auditLog:  auditLog,
+		metrics:   metricsReg,
+		scheduler: schedMgr,
 	}
 }
 
@@ -64,16 +132,54 @@ func (s *Server) Start(ctx context.Context) error {
 	// Serve index.html at root
 	mux.HandleFunc("GET /", s.handleIndex)
 
-	// API routes
+	// ---- API routes ----
+	// Device
 	mux.HandleFunc("GET /api/devices", s.handleGetDevices)
 	mux.HandleFunc("GET /api/health", s.handleGetHealth)
+
+	// History
 	mux.HandleFunc("GET /api/history", s.handleGetHistory)
+
+	// Wipe (queue-based)
 	mux.HandleFunc("POST /api/wipe", s.handlePostWipe)
 	mux.HandleFunc("POST /api/test-wipe", s.handlePostTestWipe)
 	mux.HandleFunc("POST /api/cancel", s.handlePostCancel)
-	mux.HandleFunc("GET /api/job", s.handleGetJob)
-	mux.HandleFunc("GET /api/config", s.handleGetConfig)
-	mux.HandleFunc("POST /api/config", s.handlePostConfig)
+
+	// Jobs
+	mux.HandleFunc("GET /api/jobs", s.handleGetJobs)
+	mux.HandleFunc("GET /api/jobs/{id}", s.handleGetJob)
+	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.handlePostCancelJob)
+
+	// Schemes
+	mux.HandleFunc("GET /api/schemes", s.handleGetSchemes)
+
+	// Presets
+	mux.HandleFunc("GET /api/presets", s.handleGetPresets)
+	mux.HandleFunc("POST /api/presets", s.handlePostPresets)
+	mux.HandleFunc("PUT /api/presets/{id}", s.handlePutPreset)
+	mux.HandleFunc("DELETE /api/presets/{id}", s.handleDeletePreset)
+
+	// Config / Settings
+	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
+	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
+	mux.HandleFunc("GET /api/config", s.handleGetConfig)   // backward compat
+	mux.HandleFunc("POST /api/config", s.handlePostConfig) // backward compat
+
+	// Certificates
+	mux.HandleFunc("GET /api/cert/pubkey", s.handleGetPubKey)
+	mux.HandleFunc("GET /api/cert/{jobId}/json", s.handleGetCertJSON)
+	mux.HandleFunc("GET /api/cert/{jobId}/pdf", s.handleGetCertPDF)
+	mux.HandleFunc("POST /api/cert/verify", s.handlePostCertVerify)
+
+	// Audit
+	mux.HandleFunc("GET /api/audit", s.handleGetAudit)
+
+	// Schedules
+	mux.HandleFunc("GET /api/schedules", s.handleGetSchedules)
+	mux.HandleFunc("POST /api/schedules", s.handlePostSchedules)
+	mux.HandleFunc("DELETE /api/schedules/{id}", s.handleDeleteSchedule)
+
+	// SSE
 	mux.HandleFunc("GET /api/events", s.handleSSE)
 
 	// Health check
@@ -93,8 +199,41 @@ func (s *Server) Start(ctx context.Context) error {
 	log.Printf("server listening on :%s", s.port)
 	log.Println("open http://localhost:" + s.port)
 
+	// Start separate metrics listener (default 127.0.0.1:9090).
+	// Set METRICS_BIND="" to disable entirely.
+	metricsBind := os.Getenv("METRICS_BIND")
+	if metricsBind == "" {
+		metricsBind = "127.0.0.1:9090" // loopback-only by default
+	}
+	if metricsBind != "off" {
+		go func() {
+			metricsMux := http.NewServeMux()
+			metricsMux.Handle("GET /metrics", s.metrics.Handler())
+			ln, err := net.Listen("tcp", metricsBind)
+			if err != nil {
+				log.Printf("WARNING: metrics listener on %s failed: %v (metrics disabled)", metricsBind, err)
+				return
+			}
+			log.Printf("metrics listening on %s", metricsBind)
+			metricsServer := &http.Server{Handler: metricsMux, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
+			go func() {
+				<-ctx.Done()
+				metricsServer.Close()
+			}()
+			metricsServer.Serve(ln)
+		}()
+	}
+
 	// Start background device watcher
 	go s.watchDevices(ctx)
+
+	// Start job queue dispatcher
+	go s.jobs.Start(ctx)
+
+	// Start scheduler (disabled — cron parser is a stub)
+	// if s.scheduler != nil {
+	// 	go s.scheduler.Start(ctx)
+	// }
 
 	// Start server
 	errCh := make(chan error, 1)
@@ -142,10 +281,50 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, ev wipe.ProgressEvent) {
+	writeSSEEventID(w, flusher, ev, 0)
+}
+
+func writeSSEEventID(w http.ResponseWriter, flusher http.Flusher, ev wipe.ProgressEvent, id uint64) {
 	data, _ := json.Marshal(ev)
-	msg := "data: " + string(data) + "\n\n"
+	var msg string
+	if id > 0 {
+		if ev.EventType != "" {
+			msg = fmt.Sprintf("id: %d\nevent: %s\ndata: %s\n\n", id, ev.EventType, data)
+		} else {
+			msg = fmt.Sprintf("id: %d\ndata: %s\n\n", id, data)
+		}
+	} else {
+		if ev.EventType != "" {
+			msg = "event: " + ev.EventType + "\ndata: " + string(data) + "\n\n"
+		} else {
+			msg = "data: " + string(data) + "\n\n"
+		}
+	}
 	w.Write([]byte(msg))
 	flusher.Flush()
+}
+
+// auditEvent logs a security-relevant event with the correlation ID from r.
+// Silently no-ops if the audit log is not configured.
+func (s *Server) auditEvent(r *http.Request, event, target string, details map[string]interface{}) {
+	if s.auditLog == nil {
+		return
+	}
+	s.auditLog.Log(audit.Event{
+		Event:     event,
+		Actor:     "http",
+		Target:    target,
+		Details:   details,
+		RequestID: requestIDFromContext(r.Context()),
+	})
+}
+
+// sendRefreshEvent pushes a UI refresh event through the SSE hub.
+func (s *Server) sendRefreshEvent() {
+	s.sseHub.Broadcast(wipe.ProgressEvent{
+		EventType: "refresh",
+		Timestamp: time.Now(),
+	})
 }
 
 // watchDevices periodically scans for USB device changes and broadcasts
@@ -167,7 +346,6 @@ func (s *Server) watchDevices(ctx context.Context) {
 				continue
 			}
 
-			// Build stable fingerprint of current device paths
 			paths := make([]string, 0, len(devices))
 			for _, d := range devices {
 				paths = append(paths, d.Path)
@@ -176,7 +354,6 @@ func (s *Server) watchDevices(ctx context.Context) {
 			current := strings.Join(paths, ",")
 
 			if current != lastDevicePaths && lastDevicePaths != "" {
-				// Device list changed — tell SSE clients to refresh
 				s.sseHub.Broadcast(wipe.ProgressEvent{
 					EventType: "refresh",
 					Timestamp: time.Now(),

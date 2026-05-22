@@ -1,7 +1,7 @@
 FROM golang:1.26-alpine
 WORKDIR /src
-RUN apk add --no-cache \
-    smartmontools dosfstools parted util-linux e2fsprogs \
+RUN apk update && apk add --no-cache \
+    smartmontools dosfstools parted util-linux e2fsprogs hdparm \
     git make
 RUN go install github.com/air-verse/air@latest
 EXPOSE 8181

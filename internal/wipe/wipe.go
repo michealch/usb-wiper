@@ -8,7 +8,6 @@ import (
 	"os"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/usb-wiper/internal/device"
 )
@@ -77,7 +76,7 @@ func Wipe(ctx context.Context, devicePath string, progress chan<- ProgressEvent,
 	defer f.Close()
 
 	// Get device size via ioctl BLKGETSIZE64
-	totalBytes, err := blkGetSize64(f)
+	totalBytes, err := BlkGetSize64(f)
 	if err != nil {
 		return fmt.Errorf("get device size: %w", err)
 	}
@@ -238,14 +237,15 @@ func VerifyRandomChunks(devicePath string, totalBytes, verifySize uint64, progre
 	return totalVerified, nil
 }
 
-// blkGetSize64 retrieves device size in bytes using ioctl BLKGETSIZE64.
-func blkGetSize64(f *os.File) (uint64, error) {
-	var size uint64
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), 0x80081272, uintptr(unsafe.Pointer(&size)))
-	if errno != 0 {
-		return 0, fmt.Errorf("ioctl BLKGETSIZE64: %v", errno)
-	}
-	return size, nil
+// openDeviceWrite opens a device file for direct writing (O_SYNC).
+func openDeviceWrite(devicePath string) (*os.File, error) {
+	return os.OpenFile(devicePath, os.O_WRONLY|syscall.O_SYNC, 0)
+}
+
+// seekToStart seeks the file descriptor to byte 0.
+func seekToStart(f *os.File) error {
+	_, err := f.Seek(0, 0)
+	return err
 }
 
 func sendProgress(ch chan<- ProgressEvent, devicePath string, written, total uint64, start time.Time, samples []speedSample, status string) {
