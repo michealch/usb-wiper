@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   tag:
@@ -43,14 +44,28 @@ jobs:
         run: |
           cat CHANGES.md | cat - CHANGELOG.md > /tmp/new-changelog.md
           mv /tmp/new-changelog.md CHANGELOG.md
+          cat CHANGES.md >> $GITHUB_STEP_SUMMARY
           rm CHANGES.md
 
       - name: Commit and tag
         if: steps.check.outputs.skip == 'false'
         run: |
+          TAG="${{ steps.check.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md
-          git commit -m "chore: release ${{ steps.check.outputs.version }}" || true
-          git tag -a ${{ steps.check.outputs.version }} -m "Release ${{ steps.check.outputs.version }}"
-          git push https://x-access-token:${{ secrets.RELEASE_PAT }}@github.com/${{ github.repository }}.git HEAD:main --tags
+          git commit -m "chore: release ${TAG}" || true
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin HEAD:main --tags
+
+      - name: Trigger Release workflow
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          TAG="${{ steps.check.outputs.version }}"
+          echo "Dispatching Release workflow for tag ${TAG}"
+          gh workflow run release.yml \
+            --repo "${{ github.repository }}" \
+            --ref main \
+            --field "tag=${TAG}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
