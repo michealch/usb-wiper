@@ -1,4 +1,14 @@
 
+## [0.5.2] - 2026-05-22
+
+
+### Fixed
+
+- Return Job copies from Get and List to prevent data race
+
+
+
+
 ## [0.5.1] - 2026-05-22
 
 
