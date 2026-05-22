@@ -225,6 +225,11 @@ async function loadDeviceHealth(devicePath) {
       deviceHealth[devicePath] = await res.json();
     }
     const h = deviceHealth[devicePath];
+
+    // Detect NVMe vs ATA from raw JSON to show appropriate fields
+    const nvmeLog = (h.raw && (h.raw.nvme_smart_health_log || h.raw.nvme_smart_health_information_log)) || null;
+    const isNVMe = !!nvmeLog;
+
     const rows = [
       ['Status', h.healthStatus || 'UNKNOWN'],
       ['Model', h.modelName || '—'],
@@ -234,10 +239,26 @@ async function loadDeviceHealth(devicePath) {
       ['Power On Hours', h.powerOnHours ? h.powerOnHours.toLocaleString() : '—'],
       ['Power Cycles', h.powerCycleCount ? h.powerCycleCount.toLocaleString() : '—'],
       ['Temperature', h.temperatureC ? h.temperatureC + '°C' : '—'],
-      ['Reallocated', h.reallocatedSectors ? h.reallocatedSectors.toLocaleString() : '0'],
-      ['Pending', h.pendingSectors ? h.pendingSectors.toLocaleString() : '0'],
-      ['Uncorr.', h.uncorrectableErrors ? h.uncorrectableErrors.toLocaleString() : '0'],
     ];
+
+    if (isNVMe) {
+      // NVMe-specific fields
+      if (nvmeLog.available_spare !== undefined) {
+        rows.push(['Spare Available', nvmeLog.available_spare + '%']);
+      }
+      if (nvmeLog.percentage_used !== undefined) {
+        rows.push(['Endurance Used', nvmeLog.percentage_used + '%']);
+      }
+      rows.push(['Data Read', h.readLBAs ? formatNVMeDataUnits(h.readLBAs) : '—']);
+      rows.push(['Data Written', h.writeLBAs ? formatNVMeDataUnits(h.writeLBAs) : '—']);
+      rows.push(['Media Errors', h.uncorrectableErrors != null ? h.uncorrectableErrors.toLocaleString() : '—']);
+    } else {
+      // ATA/SATA fields
+      rows.push(['Reallocated', h.reallocatedSectors ? h.reallocatedSectors.toLocaleString() : '0']);
+      rows.push(['Pending', h.pendingSectors ? h.pendingSectors.toLocaleString() : '0']);
+      rows.push(['Uncorr.', h.uncorrectableErrors ? h.uncorrectableErrors.toLocaleString() : '0']);
+    }
+
     wrapDiv.innerHTML = '<table class="mini-table">' +
       rows.map(([k, v]) => '<tr><td>' + k + '</td><td>' + v + '</td></tr>').join('') +
       '</table>';
@@ -536,6 +557,13 @@ function logMessage(msg) {
   log.textContent = '[' + time + '] ' + msg + '\n' + log.textContent;
   const lines = log.textContent.split('\n');
   if (lines.length > 50) log.textContent = lines.slice(0, 50).join('\n');
+}
+
+function formatNVMeDataUnits(units) {
+  if (!units || units === 0) return '0 B';
+  // Each NVMe data unit = 512 * 1000 bytes = 500 KB
+  const bytes = units * 512 * 1000;
+  return formatBytes(bytes);
 }
 
 function formatBytes(bytes) {

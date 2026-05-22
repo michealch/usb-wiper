@@ -17,7 +17,7 @@ jobs:
     name: Build, push, and release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901abe5b820a0f63a48cab3e2dda7f1f22  # v4.2.2
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 

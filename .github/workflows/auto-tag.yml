@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     if: "!contains(github.event.head_commit.message, 'chore: release')"
     steps:
-      - uses: actions/checkout@11bd71901abe5b820a0f63a48cab3e2dda7f1f22
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT }}
