@@ -5,12 +5,12 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: usb-wiper
-    cap_add:
-      - SYS_ADMIN
-      - SYS_RAWIO
-    devices:
-      - /dev:/dev
+    # privileged: true is REQUIRED — without it, USB devices
+    # plugged in after container start won't have device nodes.
+    # The container needs access to all host /dev entries.
+    privileged: true
     volumes:
+      - /dev:/dev
       - /sys:/sys:ro
     ports:
       - "${PORT:-8181}:8181"

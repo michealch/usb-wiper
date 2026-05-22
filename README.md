@@ -106,6 +106,16 @@ Some USB SSD enclosures (especially UASP-capable ones) report `removable=0` in s
 - **Run inside Docker** for additional isolation.
 - **Do not use on production servers** unless you fully understand the risks.
 
+## Docker Requirements
+
+`privileged: true` (or `--privileged`) is **required**. Without it:
+- USB devices plugged in after container start won't get device nodes (`/dev/sdX`).
+- The safety check will fail with "device does not exist".
+- The container needs full `/dev` access for block device I/O and new device nodes.
+
+If you restart the container after plugging in new devices, they will appear.
+But `privileged: true` ensures hotplug works without restarts.
+
 ## API Reference
 
 | Method | Path                  | Description              |
