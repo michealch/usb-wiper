@@ -4,17 +4,22 @@ import (
 	"time"
 )
 
-// ProgressEvent reports the current state of a wipe operation.
+// ProgressEvent reports the current state of a wipe operation or a UI refresh trigger.
+// When EventType is "refresh", other fields may be unset — the frontend should
+// reload /api/devices and /api/history.
 type ProgressEvent struct {
-	DevicePath   string        `json:"devicePath"`
-	BytesWritten uint64        `json:"bytesWritten"`
-	TotalBytes   uint64        `json:"totalBytes"`
-	Percent      float64       `json:"percent"`
-	Speed        uint64        `json:"speed"` // bytes per second
-	ETA          time.Duration `json:"eta"`
-	Status       string        `json:"status"`
-	Message      string        `json:"message"`
-	Timestamp    time.Time     `json:"timestamp"`
+	EventType     string        `json:"eventType,omitempty"` // "progress", "refresh" (empty = progress)
+	DevicePath    string        `json:"devicePath"`
+	BytesWritten  uint64        `json:"bytesWritten"`
+	TotalBytes    uint64        `json:"totalBytes"`
+	Percent       float64       `json:"percent"`
+	Speed         uint64        `json:"speed"` // bytes per second
+	ETA           time.Duration `json:"eta"`
+	Status        string        `json:"status"`
+	Message       string        `json:"message"`
+	Timestamp     time.Time     `json:"timestamp"`
+	Verified      string        `json:"verified,omitempty"`   // "passed", "failed"
+	BytesVerified uint64        `json:"bytesVerified"`        // how many bytes were verified
 }
 
 type speedSample struct {

@@ -6,24 +6,33 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Device represents a USB block device detected on the system.
 type Device struct {
-	Path        string   `json:"path"`
-	Name        string   `json:"name"`
-	Model       string   `json:"model"`
-	Serial      string   `json:"serial"`
-	SizeBytes   uint64   `json:"sizeBytes"`
-	Removable   bool     `json:"removable"`
-	IsUSB       bool     `json:"isUSB"`
-	WipeBlocked bool     `json:"wipeBlocked"`
-	BlockReason string   `json:"blockReason"`
-	Wiping      bool     `json:"wiping"`
-	WipeStatus  string   `json:"wipeStatus"`
-	WipePercent float64  `json:"wipePercent"`
-	Mounted     bool     `json:"mounted"`
-	MountPoints []string `json:"mountPoints"`
+	Path         string              `json:"path"`
+	Name         string              `json:"name"`
+	Model        string              `json:"model"`
+	Serial       string              `json:"serial"`
+	SizeBytes    uint64              `json:"sizeBytes"`
+	Removable    bool                `json:"removable"`
+	IsUSB        bool                `json:"isUSB"`
+	WipeBlocked  bool                `json:"wipeBlocked"`
+	BlockReason  string              `json:"blockReason"`
+	Wiping       bool                `json:"wiping"`
+	WipeStatus   string              `json:"wipeStatus"`
+	WipePercent  float64             `json:"wipePercent"`
+	Mounted      bool                `json:"mounted"`
+	MountPoints  []string            `json:"mountPoints"`
+	WipeHistory  *WipeHistorySummary `json:"wipeHistory,omitempty"`
+}
+
+// WipeHistorySummary carries the most recent wipe outcome for this device.
+type WipeHistorySummary struct {
+	Status       string    `json:"status"`       // "completed", "failed", "cancelled"
+	Verification string    `json:"verification"` // "passed", "failed", or empty
+	FinishedAt   time.Time `json:"finishedAt"`
 }
 
 // ListUSBDevices enumerates all USB block devices on the system.

@@ -13,9 +13,9 @@ services:
     volumes:
       - /sys:/sys:ro
     ports:
-      - "${PORT:-8181}:8080"
+      - "${PORT:-8181}:8181"
     environment:
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - PORT=8080
+      - PORT=8181
       - UNSAFE_ALLOW_ALL_USB=${UNSAFE_ALLOW_ALL_USB:-false}
     restart: unless-stopped

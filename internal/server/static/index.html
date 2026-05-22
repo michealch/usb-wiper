@@ -16,16 +16,19 @@
 
     <section id="devices" class="card">
       <h2>Devices</h2>
-      <button id="refresh" class="btn">Refresh</button>
+      <div class="card-header-row">
+        <button id="refresh" class="btn">Refresh</button>
+        <button id="cancel-all" class="btn btn-danger" disabled>Cancel All</button>
+      </div>
       <table id="device-table">
         <thead>
           <tr>
             <th>Path</th>
             <th>Model</th>
             <th>Size</th>
-            <th>Mounted</th>
             <th>Status</th>
-            <th></th>
+            <th>Progress</th>
+            <th>Wipe</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -33,22 +36,8 @@
       <p id="no-devices" class="muted">No USB devices detected. Insert a USB drive and click Refresh.</p>
     </section>
 
-    <section id="health" class="card" style="display:none;">
-      <h2>Health — <span id="health-device"></span></h2>
-      <table id="health-table"></table>
-    </section>
-
-    <section id="wipe" class="card">
-      <h2>Wipe Controls</h2>
-      <label class="checkbox-label">
-        <input type="checkbox" id="auto-format">
-        Auto-format as FAT32 after wipe
-      </label>
-      <div class="btn-group">
-        <button id="cancel" class="btn btn-danger" disabled>Cancel All Wipes</button>
-      </div>
-      <progress id="progress" value="0" max="100"></progress>
-      <span id="progress-text">0%</span>
+    <section id="log-section" class="card">
+      <h2>Log</h2>
       <pre id="log"></pre>
     </section>
   </div>

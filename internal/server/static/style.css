@@ -1,4 +1,4 @@
-/* USB Wiper — minimal stylesheet */
+/* USB Wiper — expandable per-device rows with inline settings and history */
 :root {
   --bg: #1a1a2e;
   --card: #16213e;
@@ -10,6 +10,13 @@
   --border: #333;
   --radius: 6px;
   --font: system-ui, -apple-system, sans-serif;
+  --green: #4caf50;
+  --yellow: #e6a817;
+  --blue: #2196f3;
+  --orange: #ff9800;
+  --cancel-bg: #555;
+  --hover-row: rgba(15, 52, 96, 0.3);
+  --expand-bg: rgba(15, 52, 96, 0.15);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -22,12 +29,13 @@ body {
   padding: 20px;
 }
 
-.container { max-width: 800px; margin: 0 auto; }
+.container { max-width: 960px; margin: 0 auto; }
 
 h1 { font-size: 1.8rem; margin-bottom: 20px; color: #fff; }
 h2 { font-size: 1.2rem; margin-bottom: 12px; color: #ccc; }
+h3 { font-size: 1.0rem; margin-bottom: 8px; color: #aaa; }
 
-.card {
+/* ---- Card ---- */
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -44,50 +52,209 @@ h2 { font-size: 1.2rem; margin-bottom: 12px; color: #ccc; }
   font-weight: 600;
 }
 
+/* ---- Card header row ---- */
+
+.card-header-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* ---- Buttons ---- */
+
 .btn {
-  padding: 8px 16px;
+  padding: 6px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--accent);
   color: var(--text);
   cursor: pointer;
   font-family: var(--font);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
 }
 .btn:hover { opacity: 0.85; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-danger { background: var(--danger); border-color: var(--danger); }
+.btn-cancel { background: var(--cancel-bg); border-color: #666; }
 
-.btn-group { display: flex; gap: 8px; margin: 12px 0; }
+/* ---- Tables ---- */
 
-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
-th { color: var(--muted); font-weight: 600; font-size: 0.85rem; }
-
-.checkbox-label { display: flex; align-items: center; gap: 8px; margin: 8px 0; cursor: pointer; }
-
-progress {
+table {
   width: 100%;
-  height: 20px;
-  margin: 12px 0 4px;
-  border-radius: 4px;
-  accent-color: var(--accent);
+  border-collapse: collapse;
+  margin: 10px 0;
 }
-progress::-webkit-progress-bar { background: var(--card); border-radius: 4px; }
-progress::-webkit-progress-value { background: var(--accent); border-radius: 4px; }
 
-#progress-text { font-size: 0.9rem; color: var(--muted); }
+th, td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.88rem;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+/* ---- Device rows ---- */
+
+.device-row {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.device-row:hover {
+  background: var(--hover-row);
+}
+
+.device-row.expanded {
+  background: rgba(15, 52, 96, 0.4);
+}
+
+/* ---- Expand row ---- */
+
+.expand-row td {
+  padding: 0;
+  border-bottom: none;
+}
+
+.expand-content {
+  background: var(--expand-bg);
+  border-top: 1px solid var(--border);
+  padding: 16px 20px;
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.expand-section {
+  flex: 1;
+  min-width: 220px;
+}
+
+.expand-section h3 {
+  margin-bottom: 6px;
+}
+
+/* ---- Mini tables inside expand ---- */
+
+.mini-table {
+  width: 100%;
+  margin: 0;
+}
+
+.mini-table td {
+  padding: 3px 8px;
+  font-size: 0.82rem;
+  border-bottom: 1px solid rgba(51, 51, 51, 0.5);
+}
+
+.mini-table td:first-child {
+  color: var(--muted);
+  font-weight: 600;
+  width: 130px;
+}
+
+.history-mini td {
+  font-size: 0.8rem;
+}
+
+/* ---- Per-device settings ---- */
+
+.settings-area label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.settings-area select {
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  font-family: var(--font);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+/* ---- Status badges ---- */
+
+.status-cell { white-space: nowrap; }
+
+.status-wiping    { color: var(--orange); font-weight: 600; }
+.status-verifying { color: var(--blue); font-weight: 600; }
+.status-passed    { color: var(--green); font-weight: 600; }
+.status-failed    { color: var(--danger); font-weight: 600; }
+.status-cancelled { color: var(--yellow); }
+.status-blocked   { color: var(--yellow); }
+.status-ready     { color: var(--green); }
+
+/* ---- Mini progress bar (per-row) ---- */
+
+.mini-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 160px;
+}
+
+.mini-progress progress {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+}
+
+.mini-progress progress::-webkit-progress-bar {
+  background: var(--bg);
+  border-radius: 4px;
+}
+
+.mini-progress progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: 4px;
+}
+
+.mini-pct {
+  font-size: 0.8rem;
+  color: var(--text);
+  font-weight: 600;
+  min-width: 42px;
+  text-align: right;
+}
+
+.mini-speed {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.mini-done {
+  font-size: 0.8rem;
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* ---- Log ---- */
 
 #log {
   background: #0d1117;
   padding: 12px;
-  margin-top: 10px;
   border-radius: var(--radius);
-  font-size: 0.85rem;
-  max-height: 200px;
+  font-size: 0.82rem;
+  max-height: 160px;
   overflow-y: auto;
   white-space: pre-wrap;
 }
+
+/* ---- Shared ---- */
 
 .muted { color: var(--muted); font-style: italic; }
 .icon { margin-right: 6px; }

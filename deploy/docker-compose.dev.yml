@@ -11,10 +11,10 @@ services:
       - /sys:/sys:ro
       - go-mod-cache:/go/pkg/mod
     ports:
-      - "8080:8080"
+      - "8181:8181"
     environment:
       - LOG_LEVEL=debug
-      - PORT=8080
+      - PORT=8181
     restart: unless-stopped
 
 volumes:

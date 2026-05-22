@@ -4,5 +4,5 @@ RUN apk add --no-cache \
     smartmontools dosfstools parted util-linux e2fsprogs \
     git make
 RUN go install github.com/air-verse/air@latest
-EXPOSE 8080
+EXPOSE 8181
 CMD ["air", "-c", ".air.toml"]

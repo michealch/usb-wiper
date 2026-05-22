@@ -2,9 +2,10 @@ package wipe
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"os"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -14,16 +15,15 @@ import (
 
 // WipeJob tracks the state of an active or completed wipe operation.
 type WipeJob struct {
-	DevicePath   string    `json:"devicePath"`
-	TotalBytes   uint64    `json:"totalBytes"`
-	BytesWritten uint64    `json:"bytesWritten"`
-	Status       string    `json:"status"` // "running", "completed", "failed", "cancelled"
-	StartedAt    time.Time `json:"startedAt"`
-	FinishedAt   time.Time `json:"finishedAt"`
-	Error        string    `json:"error"`
-	autoFormat   bool
-	mu           sync.Mutex
-	cancel       context.CancelFunc
+	DevicePath    string    `json:"devicePath"`
+	TotalBytes    uint64    `json:"totalBytes"`
+	BytesWritten  uint64    `json:"bytesWritten"`
+	Status        string    `json:"status"` // "running", "completed", "failed", "cancelled"
+	StartedAt     time.Time `json:"startedAt"`
+	FinishedAt    time.Time `json:"finishedAt"`
+	Error         string    `json:"error"`
+	Verified      string    `json:"verified,omitempty"`   // "passed", "failed", or empty
+	BytesVerified uint64    `json:"bytesVerified"`        // how many bytes were verified
 }
 
 const (
@@ -32,7 +32,8 @@ const (
 	StatusFailed    = "failed"
 	StatusCancelled = "cancelled"
 
-	bufferSize = 4 * 1024 * 1024 // 4 MiB
+	bufferSize  = 4 * 1024 * 1024 // 4 MiB
+	chunkSize   = 1 * 1024 * 1024 // 1 MiB per verification chunk
 )
 
 // Wipe performs a single-pass zero-write on the specified device.
@@ -110,13 +111,101 @@ func Wipe(ctx context.Context, devicePath string, progress chan<- ProgressEvent,
 		return fmt.Errorf("close: %w", err)
 	}
 
-	// Verify: read first and last 1 MiB, must all be zero
-	if err := verifyZero(devicePath, totalBytes); err != nil {
-		return fmt.Errorf("verification failed: %w", err)
-	}
-
 	sendProgress(progress, devicePath, bytesWritten, totalBytes, startTime, samples, "completed")
 	return nil
+}
+
+// VerifyRandomChunks reads random 1 MiB chunks scattered across the device and
+// checks that all bytes are zero. The total data read across all chunks
+// approximately equals verifySize bytes (converted to MiB boundary).
+// Returns the number of bytes actually verified.
+func VerifyRandomChunks(devicePath string, totalBytes, verifySize uint64, progress chan<- ProgressEvent) (uint64, error) {
+	if verifySize == 0 || totalBytes == 0 {
+		return 0, nil
+	}
+
+	// Ensure verifySize doesn't exceed total device size
+	if verifySize > totalBytes {
+		verifySize = totalBytes
+	}
+
+	// Calculate number of chunks (each chunk is 1 MiB)
+	numChunks := int(verifySize / chunkSize)
+	if numChunks < 1 {
+		numChunks = 1
+	}
+
+	// Cap to reasonable number
+	maxChunks := 10000
+	if numChunks > maxChunks {
+		numChunks = maxChunks
+	}
+
+	f, err := os.Open(devicePath)
+	if err != nil {
+		return 0, fmt.Errorf("open for verification: %w", err)
+	}
+	defer f.Close()
+
+	buf := make([]byte, chunkSize)
+	totalVerified := uint64(0)
+
+	// Generate random offsets
+	maxOffset := totalBytes - chunkSize
+	// Use a deterministic seed derived from time so we can report which offsets
+	// were checked, while still being "random enough" across the device.
+	seed := make([]byte, 8)
+	if _, err := rand.Read(seed); err != nil {
+		// Fallback: if crypto/rand fails, use time-based
+		binary.BigEndian.PutUint64(seed, uint64(time.Now().UnixNano()))
+	}
+	// Simple xoshiro-like state
+	s0 := binary.BigEndian.Uint64(seed)
+	s1 := s0 ^ 0x9E3779B97F4A7C15
+
+	for i := 0; i < numChunks; i++ {
+		// Generate next random offset
+		s1 ^= s0
+		s0 = ((s0 << 55) | (s0 >> 9)) ^ s1 ^ (s1 << 14)
+		s1 = ((s1 << 36) | (s1 >> 28))
+		offset := s0 % maxOffset
+
+		n, err := f.ReadAt(buf, int64(offset))
+		if err != nil && err.Error() != "EOF" {
+			return totalVerified, fmt.Errorf("read at offset %d: %w", offset, err)
+		}
+		if n == 0 {
+			continue
+		}
+
+		// Check all bytes are zero
+		for j := 0; j < n; j++ {
+			if buf[j] != 0 {
+				return totalVerified, fmt.Errorf("non-zero byte at offset %d: 0x%02x at chunk %d/%d", int64(offset)+int64(j), buf[j], i+1, numChunks)
+			}
+		}
+
+		totalVerified += uint64(n)
+
+		// Report verification progress
+		if progress != nil {
+			vPct := float64(i+1) / float64(numChunks) * 100
+			select {
+			case progress <- ProgressEvent{
+				DevicePath:   devicePath,
+				Status:       "verifying",
+				Percent:      vPct,
+				BytesWritten: totalVerified,
+				TotalBytes:   verifySize,
+				Message:      fmt.Sprintf("Verifying... %.1f%% (%d/%d chunks)", vPct, i+1, numChunks),
+				Timestamp:    time.Now(),
+			}:
+			default:
+			}
+		}
+	}
+
+	return totalVerified, nil
 }
 
 // blkGetSize64 retrieves device size in bytes using ioctl BLKGETSIZE64.
@@ -127,43 +216,6 @@ func blkGetSize64(f *os.File) (uint64, error) {
 		return 0, fmt.Errorf("ioctl BLKGETSIZE64: %v", errno)
 	}
 	return size, nil
-}
-
-// verifyZero confirms that the first and last 1 MiB of the device are all zeros.
-func verifyZero(devicePath string, totalBytes uint64) error {
-	f, err := os.Open(devicePath)
-	if err != nil {
-		return fmt.Errorf("open for verification: %w", err)
-	}
-	defer f.Close()
-
-	checkSize := uint64(1024 * 1024) // 1 MiB
-
-	// Check first 1 MiB
-	buf := make([]byte, checkSize)
-	if _, err := f.ReadAt(buf, 0); err != nil {
-		return fmt.Errorf("read beginning for verification: %w", err)
-	}
-	for i, b := range buf {
-		if b != 0 {
-			return fmt.Errorf("non-zero byte at offset %d: 0x%02x", i, b)
-		}
-	}
-
-	// Check last 1 MiB
-	if totalBytes > checkSize {
-		offset := int64(totalBytes - checkSize)
-		if _, err := f.ReadAt(buf, offset); err != nil {
-			return fmt.Errorf("read end for verification: %w", err)
-		}
-		for i, b := range buf {
-			if b != 0 {
-				return fmt.Errorf("non-zero byte at offset %d: 0x%02x", int64(offset)+int64(i), b)
-			}
-		}
-	}
-
-	return nil
 }
 
 func sendProgress(ch chan<- ProgressEvent, devicePath string, written, total uint64, start time.Time, samples []speedSample, status string) {

@@ -26,6 +26,6 @@ COPY --from=builder /out/usb-wiper /usr/local/bin/usb-wiper
 
 RUN useradd --no-create-home --shell /usr/sbin/nologin --uid 1000 wiper
 
-EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:8080/healthz || exit 1
+EXPOSE 8181
+HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:8181/healthz || exit 1
 ENTRYPOINT ["/usr/local/bin/usb-wiper"]

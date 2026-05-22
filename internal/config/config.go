@@ -5,8 +5,9 @@ import "sync"
 // Config holds in-memory application configuration.
 // Resets on container restart (no persistence).
 type Config struct {
-	AutoFormat    bool `json:"autoFormat"`
+	AutoFormat        bool `json:"autoFormat"`
 	UnsafeAllowAllUSB bool `json:"unsafeAllowAllUSB"`
+	VerifySizeGB      int  `json:"verifySizeGB"` // GiB of random data to verify post-wipe (0 = disabled, default 1)
 }
 
 type Manager struct {
@@ -20,6 +21,7 @@ func New(unsafeAllowAllUSB bool) *Manager {
 		cfg: Config{
 			AutoFormat:        false,
 			UnsafeAllowAllUSB: unsafeAllowAllUSB,
+			VerifySizeGB:      1, // default: verify 1 GiB of random data
 		},
 	}
 }
@@ -36,4 +38,11 @@ func (m *Manager) SetAutoFormat(v bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cfg.AutoFormat = v
+}
+
+// SetVerifySizeGB updates the verification size.
+func (m *Manager) SetVerifySizeGB(v int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cfg.VerifySizeGB = v
 }

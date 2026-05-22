@@ -1,5 +1,5 @@
 .PHONY: help build run test test-verbose fmt lint vet tidy \
-        docker-build docker-run dev dev-detached prod stop logs shell clean
+        docker-build dev dev-detached prod stop logs shell clean
 
 APP        := usb-wiper
 IMAGE      := usb-wiper
@@ -16,7 +16,6 @@ help:
 	@echo "  lint          - Run linter"
 	@echo "  tidy          - Run go mod tidy"
 	@echo "  docker-build  - Build production image"
-	@echo "  docker-run    - Build and run production image"
 	@echo "  dev           - Start dev compose"
 	@echo "  dev-detached  - Start dev compose in background"
 	@echo "  prod          - Start prod compose"
@@ -52,19 +51,14 @@ tidy:
 docker-build:
 	docker build -t $(IMAGE):$(TAG) .
 
-docker-run: docker-build
-	docker run --rm -it --privileged \
-		-v /dev:/dev -v /sys:/sys:ro \
-		-p 8080:8080 $(IMAGE):$(TAG)
-
 dev:
-	docker compose -f deploy/docker-compose.dev.yml up --build
+	docker compose -f deploy/docker-compose.dev.yml --env-file deploy/dev.env up --build
 
 dev-detached:
-	docker compose -f deploy/docker-compose.dev.yml up --build -d
+	docker compose -f deploy/docker-compose.dev.yml --env-file dev.env up --build -d
 
 prod:
-	docker compose -f deploy/docker-compose.prod.yml up --build -d
+	docker compose -f deploy/docker-compose.prod.yml --env-file deploy/prod.env up --build -d
 
 stop:
 	docker compose -f deploy/docker-compose.dev.yml down 2>/dev/null || true

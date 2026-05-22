@@ -4,12 +4,17 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/usb-wiper/internal/config"
+	"github.com/usb-wiper/internal/device"
+	"github.com/usb-wiper/internal/persistence"
 	"github.com/usb-wiper/internal/wipe"
 )
 
@@ -18,20 +23,29 @@ var staticFiles embed.FS
 
 // Server is the main HTTP server for the USB Wiper application.
 type Server struct {
-	port   string
-	config *config.Manager
-	sseHub *SSEHub
-	jobs   *jobManager
-	server *http.Server
+	port    string
+	config  *config.Manager
+	sseHub  *SSEHub
+	jobs    *jobManager
+	history *persistence.Store
+	server  *http.Server
 }
 
 // New creates a new Server instance.
-func New(port string, unsafeAllowAllUSB bool) *Server {
+func New(port string, unsafeAllowAllUSB bool, dataDir string) *Server {
+	history, err := persistence.New(dataDir)
+	if err != nil {
+		log.Printf("WARNING: failed to initialize history store: %v (wipes will not be persisted)", err)
+		// Create a minimal in-memory-only store
+		history, _ = persistence.New("")
+	}
+
 	return &Server{
-		port:   port,
-		config: config.New(unsafeAllowAllUSB),
-		sseHub: NewSSEHub(),
-		jobs:   newJobManager(),
+		port:    port,
+		config:  config.New(unsafeAllowAllUSB),
+		sseHub:  NewSSEHub(),
+		jobs:    newJobManager(),
+		history: history,
 	}
 }
 
@@ -53,6 +67,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// API routes
 	mux.HandleFunc("GET /api/devices", s.handleGetDevices)
 	mux.HandleFunc("GET /api/health", s.handleGetHealth)
+	mux.HandleFunc("GET /api/history", s.handleGetHistory)
 	mux.HandleFunc("POST /api/wipe", s.handlePostWipe)
 	mux.HandleFunc("POST /api/cancel", s.handlePostCancel)
 	mux.HandleFunc("GET /api/job", s.handleGetJob)
@@ -76,6 +91,9 @@ func (s *Server) Start(ctx context.Context) error {
 
 	log.Printf("server listening on :%s", s.port)
 	log.Println("open http://localhost:" + s.port)
+
+	// Start background device watcher
+	go s.watchDevices(ctx)
 
 	// Start server
 	errCh := make(chan error, 1)
@@ -127,4 +145,44 @@ func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, ev wipe.Progress
 	msg := "data: " + string(data) + "\n\n"
 	w.Write([]byte(msg))
 	flusher.Flush()
+}
+
+// watchDevices periodically scans for USB device changes and broadcasts
+// refresh events via SSE when the device list changes (plug/unplug).
+func (s *Server) watchDevices(ctx context.Context) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	var lastDevicePaths string
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cfg := s.config.Get()
+			devices, err := device.ListUSBDevices(cfg.UnsafeAllowAllUSB)
+			if err != nil {
+				continue
+			}
+
+			// Build stable fingerprint of current device paths
+			paths := make([]string, 0, len(devices))
+			for _, d := range devices {
+				paths = append(paths, d.Path)
+			}
+			sort.Strings(paths)
+			current := strings.Join(paths, ",")
+
+			if current != lastDevicePaths && lastDevicePaths != "" {
+				// Device list changed — tell SSE clients to refresh
+				s.sseHub.Broadcast(wipe.ProgressEvent{
+					EventType: "refresh",
+					Timestamp: time.Now(),
+					Message:   fmt.Sprintf("device list changed (%d device(s))", len(paths)),
+				})
+			}
+			lastDevicePaths = current
+		}
+	}
 }

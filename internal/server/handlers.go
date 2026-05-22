@@ -11,6 +11,7 @@ import (
 
 	"github.com/usb-wiper/internal/device"
 	"github.com/usb-wiper/internal/format"
+	"github.com/usb-wiper/internal/persistence"
 	"github.com/usb-wiper/internal/wipe"
 )
 
@@ -90,6 +91,15 @@ type wipeJobState struct {
 	cancel   context.CancelFunc
 }
 
+// sendRefreshEvent pushes a UI refresh event through the SSE hub.
+// The frontend uses this to reload device list and history when something changes.
+func (s *Server) sendRefreshEvent() {
+	s.sseHub.Broadcast(wipe.ProgressEvent{
+		EventType: "refresh",
+		Timestamp: time.Now(),
+	})
+}
+
 func (s *Server) handleGetDevices(w http.ResponseWriter, r *http.Request) {
 	cfg := s.config.Get()
 	devices, err := device.ListUSBDevices(cfg.UnsafeAllowAllUSB)
@@ -111,6 +121,15 @@ func (s *Server) handleGetDevices(w http.ResponseWriter, r *http.Request) {
 			devices[i].WipePercent = 0
 			if job.TotalBytes > 0 {
 				devices[i].WipePercent = float64(job.BytesWritten) / float64(job.TotalBytes) * 100
+			}
+		}
+
+		// Also check history for completed devices not currently active
+		if latest := s.history.GetLatest(devices[i].Path); latest != nil {
+			devices[i].WipeHistory = &device.WipeHistorySummary{
+				Status:       latest.Status,
+				Verification: latest.Verification,
+				FinishedAt:   latest.FinishedAt,
 			}
 		}
 	}
@@ -136,10 +155,41 @@ func (s *Server) handleGetHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, health)
 }
 
+func (s *Server) handleGetHistory(w http.ResponseWriter, r *http.Request) {
+	devicePath := r.URL.Query().Get("device")
+	if devicePath != "" {
+		// Return history for a specific device
+		all := s.history.GetAll()
+		var filtered []persistence.WipeRecord
+		for _, rec := range all {
+			if rec.DevicePath == devicePath {
+				filtered = append(filtered, rec)
+			}
+		}
+		if filtered == nil {
+			filtered = []persistence.WipeRecord{}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"history": filtered,
+		})
+		return
+	}
+
+	// Return all history
+	all := s.history.GetAll()
+	if all == nil {
+		all = []persistence.WipeRecord{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"history": all,
+	})
+}
+
 func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Device     string `json:"device"`     // single device or comma-separated list
-		AutoFormat bool   `json:"autoFormat"`
+		Device       string `json:"device"` // single device or comma-separated list
+		AutoFormat   bool   `json:"autoFormat"`
+		VerifySizeGB *int   `json:"verifySizeGB"` // per-device verification size, overrides global config
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -154,6 +204,11 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 
 	cfg := s.config.Get()
 	s.config.SetAutoFormat(req.AutoFormat)
+
+	verifySizeGB := cfg.VerifySizeGB
+	if req.VerifySizeGB != nil {
+		verifySizeGB = *req.VerifySizeGB
+	}
 
 	// Split comma-separated devices and deduplicate
 	devices := splitDevices(req.Device)
@@ -173,7 +228,7 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Start the wipe
-		if err := s.startDeviceWipe(dev, cfg.UnsafeAllowAllUSB); err != nil {
+		if err := s.startDeviceWipe(dev, cfg.UnsafeAllowAllUSB, req.AutoFormat, verifySizeGB); err != nil {
 			if _, ok := err.(*jobConflictError); ok {
 				conflicts = append(conflicts, dev)
 			} else {
@@ -198,7 +253,7 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 }
 
 // startDeviceWipe begins a wipe on a single device.
-func (s *Server) startDeviceWipe(devicePath string, unsafeAllowAllUSB bool) error {
+func (s *Server) startDeviceWipe(devicePath string, unsafeAllowAllUSB bool, autoFormat bool, verifySizeGB int) error {
 	progress := make(chan wipe.ProgressEvent, 64)
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -219,37 +274,133 @@ func (s *Server) startDeviceWipe(devicePath string, unsafeAllowAllUSB bool) erro
 		return err
 	}
 
+	// Resolve device info for history record
+	devInfo, _ := device.GetDevice(devicePath)
+	modelName := ""
+	serial := ""
+	var sizeBytes uint64
+	if devInfo != nil {
+		modelName = devInfo.Model
+		serial = devInfo.Serial
+		sizeBytes = devInfo.SizeBytes
+	}
+
+	// Create initial history record
+	historyRec := persistence.WipeRecord{
+		DevicePath:   devicePath,
+		DeviceModel:  modelName,
+		DeviceSerial: serial,
+		SizeBytes:    sizeBytes,
+		Status:       wipe.StatusRunning,
+		StartedAt:    time.Now(),
+	}
+	if err := s.history.Append(historyRec); err != nil {
+		log.Printf("WARNING: failed to persist wipe start: %v", err)
+	}
+
 	// Run wipe in background
 	go func() {
 		defer close(progress)
 
 		err := wipe.Wipe(ctx, devicePath, progress, unsafeAllowAllUSB)
-		now := time.Now()
 
 		if err != nil {
+			now := time.Now()
 			if ctx.Err() == context.Canceled {
 				job.Status = wipe.StatusCancelled
 			} else {
 				job.Status = wipe.StatusFailed
 				job.Error = err.Error()
 			}
+			job.FinishedAt = now
+
+			// Update history
+			s.history.UpdateByDevice(devicePath, func(r *persistence.WipeRecord) {
+				r.Status = job.Status
+				r.Error = job.Error
+				r.FinishedAt = now
+				r.Duration = now.Sub(job.StartedAt).Round(time.Second).String()
+			})
+
+			// Send final event
+			s.sseHub.Broadcast(wipe.ProgressEvent{
+				DevicePath:   devicePath,
+				Status:       job.Status,
+				Message:      "Wipe " + job.Status + " for " + devicePath,
+				Timestamp:    time.Now(),
+				TotalBytes:   job.TotalBytes,
+				BytesWritten: job.BytesWritten,
+				Percent:      100,
+			})
+			s.sendRefreshEvent()
+			return
+		}
+
+		// ---- Wipe succeeded, now verify ----
+		verifySize := uint64(verifySizeGB) * 1024 * 1024 * 1024
+
+		var verified string
+		var bytesVerified uint64
+
+		if verifySize > 0 && job.TotalBytes > 0 {
+			log.Printf("verifying %d GiB of random data on %s", verifySizeGB, devicePath)
+			vBytes, vErr := wipe.VerifyRandomChunks(devicePath, job.TotalBytes, verifySize, progress)
+			bytesVerified = vBytes
+
+			if vErr != nil {
+				log.Printf("verification failed for %s: %v", devicePath, vErr)
+				verified = "failed"
+				job.Status = wipe.StatusFailed
+				job.Error = "Verification failed: " + vErr.Error()
+			} else {
+				log.Printf("verification passed for %s: %d bytes verified", devicePath, vBytes)
+				verified = "passed"
+				job.Status = wipe.StatusCompleted
+			}
 		} else {
 			job.Status = wipe.StatusCompleted
+		}
 
-			// Auto-format if requested (uses global config at wipe start time)
-			// Note: autoFormat is per-wipe-request, we store it in the job
-			// For now, format is controlled by the global config at wipe time
-			cfg := s.config.Get()
-			if cfg.AutoFormat {
-				log.Printf("auto-formatting %s as FAT32", devicePath)
-				if formatErr := format.FormatFAT32(devicePath, unsafeAllowAllUSB); formatErr != nil {
-					log.Printf("auto-format failed: %v", formatErr)
-					job.Status = wipe.StatusFailed
-					job.Error = "Wipe completed but format failed: " + formatErr.Error()
-				}
+		job.Verified = verified
+		job.BytesVerified = bytesVerified
+
+		// Auto-format if requested and wipe completed successfully
+		if job.Status == wipe.StatusCompleted && autoFormat {
+			log.Printf("auto-formatting %s as FAT32", devicePath)
+			if formatErr := format.FormatFAT32(devicePath, unsafeAllowAllUSB); formatErr != nil {
+				log.Printf("auto-format failed: %v", formatErr)
+				job.Status = wipe.StatusFailed
+				job.Error = "Wipe completed but format failed: " + formatErr.Error()
+				verified = ""
 			}
 		}
+
+		now := time.Now()
 		job.FinishedAt = now
+
+		// Update history record with final status
+		s.history.UpdateByDevice(devicePath, func(r *persistence.WipeRecord) {
+			r.Status = job.Status
+			r.Error = job.Error
+			r.Verification = verified
+			r.BytesVerified = bytesVerified
+			r.FinishedAt = now
+			r.Duration = now.Sub(job.StartedAt).Round(time.Second).String()
+		})
+
+		// Send final event
+		s.sseHub.Broadcast(wipe.ProgressEvent{
+			DevicePath:    devicePath,
+			Status:        job.Status,
+			Message:       "Wipe " + job.Status + " for " + devicePath,
+			Timestamp:     time.Now(),
+			TotalBytes:    job.TotalBytes,
+			BytesWritten:  job.BytesWritten,
+			Percent:       100,
+			Verified:      verified,
+			BytesVerified: bytesVerified,
+		})
+		s.sendRefreshEvent()
 	}()
 
 	// Pipe progress to SSE hub
@@ -264,18 +415,10 @@ func (s *Server) startDeviceWipe(devicePath string, unsafeAllowAllUSB bool) erro
 			s.jobs.mu.Unlock()
 			s.sseHub.Broadcast(ev)
 		}
-
-		// Send final event
-		s.sseHub.Broadcast(wipe.ProgressEvent{
-			DevicePath:   devicePath,
-			Status:       job.Status,
-			Message:      "Wipe " + job.Status + " for " + devicePath,
-			Timestamp:    time.Now(),
-			TotalBytes:   job.TotalBytes,
-			BytesWritten: job.BytesWritten,
-			Percent:      100,
-		})
 	}()
+
+	// Tell all SSE clients to refresh the device list
+	s.sendRefreshEvent()
 
 	return nil
 }
@@ -291,6 +434,7 @@ func (s *Server) handlePostCancel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		state.cancel()
+		s.sendRefreshEvent()
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 		return
 	}
@@ -313,6 +457,7 @@ func (s *Server) handlePostCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.sendRefreshEvent()
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":        true,
 		"cancelled": cancelled,
@@ -348,7 +493,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
 	var cfg struct {
-		AutoFormat bool `json:"autoFormat"`
+		AutoFormat   bool `json:"autoFormat"`
+		VerifySizeGB *int `json:"verifySizeGB"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
@@ -357,6 +503,10 @@ func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.config.SetAutoFormat(cfg.AutoFormat)
+	if cfg.VerifySizeGB != nil {
+		s.config.SetVerifySizeGB(*cfg.VerifySizeGB)
+	}
+
 	writeJSON(w, http.StatusOK, s.config.Get())
 }
 

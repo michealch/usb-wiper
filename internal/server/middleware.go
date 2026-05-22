@@ -42,8 +42,8 @@ func withCORS(next http.Handler) http.Handler {
 		origin := r.Header.Get("Origin")
 		if origin != "" {
 			// Allow localhost origins
-			if origin == "http://localhost:8080" ||
-				origin == "http://127.0.0.1:8080" ||
+			if origin == "http://localhost:8181" ||
+				origin == "http://127.0.0.1:8181" ||
 				origin == "http://localhost" {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")

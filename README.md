@@ -6,9 +6,13 @@ Securely wipe USB storage devices from your browser.
 
 ## Features
 
-- **Secure Wipe** — Single-pass zero write across the entire USB device with verification.
+- **Secure Wipe** — Single-pass zero write across the entire USB device with random-chunk verification.
+- **Verification** — Reads random 1 MiB chunks (configurable 0–4 GiB) from the wiped device to confirm all zeros.
+- **Wipe History** — Persistent JSON-backed log of all wipe operations with status and verification results.
+- **Multi-Device** — Concurrent wipe support with per-device progress bars in the UI.
 - **SMART Health** — Display device health information (power-on hours, temperature, reallocated sectors, etc.)
-- **Web UI** — Minimal web interface with real-time progress tracking via SSE.
+- **Real-time UI** — Push-driven via Server-Sent Events (SSE). No page polling. Progress updates, device plug/unplug detection, and history changes are delivered in real time.
+- **Expandable Rows** — Click any device to expand and see health info, per-device wipe settings (auto-format, verify size), and wipe history.
 - **Auto-Format** — Optional FAT32 formatting after wipe.
 - **Docker** — Runs as a single container, Debian stable-slim base.
 
@@ -20,11 +24,12 @@ Securely wipe USB storage devices from your browser.
 docker run --rm -it --privileged \
   -v /dev:/dev \
   -v /sys:/sys:ro \
-  -p 8080:8080 \
+  -v /path/to/data:/data \
+  -p 8181:8181 \
   michealchoudhary/usb-wiper:latest
 ```
 
-Open [http://localhost:8080](http://localhost:8080) in your browser.
+Open [http://localhost:8181](http://localhost:8181) in your browser.
 
 Available image tags: `latest`, `v0.1.0`, `0.1`, `0`
 
@@ -41,8 +46,9 @@ services:
     volumes:
       - /dev:/dev
       - /sys:/sys:ro
+      - ./data:/data
     ports:
-      - "8080:8080"
+      - "8181:8181"
     environment:
       - UNSAFE_ALLOW_ALL_USB=1
       - LOG_LEVEL=info
@@ -74,8 +80,9 @@ sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 
 | Variable                | Default | Description                                                        |
 |-------------------------|---------|--------------------------------------------------------------------|
-| `PORT`                  | `8080`  | HTTP port the server listens on                                    |
+| `PORT`                  | `8181`  | HTTP port the server listens on                                    |
 | `LOG_LEVEL`             | `info`  | Log level: `debug`, `info`, `warn`, `error`                        |
+| `DATA_DIR`              | `/data` | Directory for persistent wipe history (`history.json`)             |
 | `UNSAFE_ALLOW_ALL_USB`  | (unset) | Set to `1` to skip the removable-device check for USB SSDs/enclosures |
 
 ### When to use `UNSAFE_ALLOW_ALL_USB=1`
@@ -105,6 +112,7 @@ Some USB SSD enclosures (especially UASP-capable ones) report `removable=0` in s
 |--------|-----------------------|--------------------------|
 | GET    | `/api/devices`        | List USB devices         |
 | GET    | `/api/health?device=X`| SMART health info        |
+| GET    | `/api/history?device=X`| Wipe history (all or per device) |
 | POST   | `/api/wipe`           | Start wipe               |
 | POST   | `/api/cancel`         | Cancel active wipe       |
 | GET    | `/api/job`            | Current job status       |
@@ -118,9 +126,34 @@ Some USB SSD enclosures (especially UASP-capable ones) report `removable=0` in s
 ```json
 {
   "device": "/dev/sdb",
-  "autoFormat": false
+  "autoFormat": false,
+  "verifySizeGB": 1
 }
 ```
+
+### SSE Event Types
+
+The `/api/events` SSE stream delivers two event types:
+
+| eventType   | Trigger | Frontend action |
+|-------------|---------|-----------------|
+| *(empty/"progress")* | Wipe progress | Update per-row progress bar + status badge |
+| `"refresh"` | Wipe start/complete/cancel, or device plug/unplug detected | Full device list + history reload |
+
+The server scans for device changes every 3 seconds and broadcasts a refresh
+event when USB devices are plugged or unplugged.
+
+### Random-Chunk Verification
+
+After wiping, the server reads random 1 MiB chunks across the device and
+checks every byte is zero. Configure the total verification size (0–4 GiB)
+via the UI dropdown or the `verifySizeGB` config field. Set to 0 to disable.
+
+### Wipe History
+
+All wipe operations are recorded in `$DATA_DIR/history.json` (default `/data`).
+History persists across container restarts when a volume is mounted.
+View history in the web UI or via `GET /api/history`.
 
 ## Development
 
@@ -153,6 +186,7 @@ internal/
   wipe/                → Zero-write engine, progress tracking
   format/              → FAT32 formatting
   config/              → In-memory configuration
+  persistence/         → JSON wipe history store (atomic writes)
   server/              → HTTP server, SSE hub, handlers
   server/static/       → Embedded web UI (HTML, CSS, JS)
 ```
