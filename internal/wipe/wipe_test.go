@@ -81,8 +81,10 @@ func TestBlkGetSize64_RegularFile(t *testing.T) {
 }
 
 func TestVerifyZero_EmptyDevice(t *testing.T) {
-	// verifyZero requires a real block device
-	t.Log("verifyZero tested by integration")
+	// verifyZero was replaced by VerifyRandomChunks.
+	// VerifyRandomChunks requires a real block device to test.
+	// The function is tested by integration when running against real USB drives.
+	t.Log("VerifyRandomChunks tested by integration")
 }
 
 func TestProgressEvent_JSON(t *testing.T) {
