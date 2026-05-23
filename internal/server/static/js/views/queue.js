@@ -1,4 +1,5 @@
 // Queue view
+import { progressMap } from '../app.js';
 
 let allJobs = [];
 
@@ -61,8 +62,12 @@ function renderQueue() {
 }
 
 function renderJobCard(j) {
+  const ps = progressMap.get(j.devicePath);
+  const dispProgress = ps ? ps.percent : (j.progress || 0);
+  const dispPass = ps ? ps.currentPass : j.currentPass;
+  const dispTotal = ps ? ps.totalPasses : j.totalPasses;
   return `
-    <div class="job-card">
+    <div class="job-card" data-device="${escapeAttr(j.devicePath)}">
       <div class="job-card-header">
         <div>
           <span class="job-card-device">${j.devicePath}</span>
@@ -70,25 +75,35 @@ function renderJobCard(j) {
         </div>
         <span class="badge ${j.status === 'running' ? 'badge-warning' : j.status === 'verifying' ? 'badge-info' : 'badge-neutral'}">${j.status}</span>
       </div>
-      ${j.totalPasses > 1 ? `<div class="progress-multi mb-2">${multiPassSegments(j)}</div>` : `<progress value="${j.progress || 0}" max="100" style="margin-bottom:8px"></progress>`}
+      ${dispTotal > 1 ? `<div class="progress-multi mb-2">${multiPassSegments(dispPass, dispTotal, dispProgress)}</div>` : `<progress value="${dispProgress}" max="100" style="margin-bottom:8px"></progress>`}
       <div class="progress-info">
-        <span>${(j.progress || 0).toFixed(1)}%</span>
-        ${j.totalPasses > 1 ? `<span>Pass ${j.currentPass}/${j.totalPasses}</span>` : ''}
+        <span class="progress-pct">${dispProgress.toFixed(1)}%</span>
+        ${dispTotal > 1 ? `<span class="progress-pass">Pass ${dispPass}/${dispTotal}</span>` : ''}
         <button class="btn btn-ghost btn-sm job-cancel-btn" data-job-id="${j.id}" style="margin-left:auto">Cancel</button>
       </div>
     </div>
   `;
 }
 
-function multiPassSegments(j) {
+function multiPassSegments(currentPass, totalPasses, overallPercent) {
+  const perPass = 100 / totalPasses;
   let h = '';
-  for (let p = 1; p <= j.totalPasses; p++) {
+  for (let p = 1; p <= totalPasses; p++) {
     let cls = 'pending';
-    if (p < j.currentPass) cls = 'completed';
-    else if (p === j.currentPass) cls = 'active';
-    h += `<div class="progress-segment ${cls}" style="width:${100/j.totalPasses}%"></div>`;
+    let w = perPass;
+    if (p < currentPass) cls = 'completed';
+    else if (p === currentPass) {
+      cls = 'active';
+      w = overallPercent - ((currentPass - 1) * perPass);
+      w = Math.max(1, Math.min(w, perPass));
+    }
+    h += `<div class="progress-segment ${cls}" style="width:${w}%"></div>`;
   }
   return h;
+}
+
+function escapeAttr(s) {
+  return s.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function updateQueue(jobs) {

@@ -13,6 +13,77 @@ import { loadAndRenderSettings } from './views/settings.js';
 // Current route
 let currentRoute = 'dashboard';
 
+// Shared progress store — maps devicePath to latest progress state from SSE.
+// All views read from this for initial render and `patchProgressDOM` updates the
+// corresponding DOM elements without requiring a full re-render.
+export const progressMap = new Map();
+
+function updateProgressState(ev) {
+  if (!ev.devicePath || ev.percent === undefined) return;
+  progressMap.set(ev.devicePath, {
+    percent: ev.percent,
+    currentPass: ev.currentPass || 1,
+    totalPasses: ev.totalPasses || 1,
+    status: ev.status || ''
+  });
+}
+
+/**
+ * Patch progress elements in all views that display a progress bar for
+ * the given device. Uses [data-device] selectors to find the container
+ * and updates <progress>, .progress-pct, and .progress-pass inside it.
+ * Works across Devices, Dashboard, and Queue views without re-rendering.
+ */
+function patchProgressDOM(ev) {
+  if (!ev.devicePath || ev.percent === undefined) return;
+  const esc = CSS.escape(ev.devicePath);
+  const containers = document.querySelectorAll(`[data-device="${esc}"]`);
+  containers.forEach(container => {
+    const progressEl = container.querySelector('progress');
+    if (progressEl) progressEl.value = ev.percent;
+
+    const pctSpan = container.querySelector('.progress-pct');
+    if (pctSpan) pctSpan.textContent = ev.percent.toFixed(1) + '%';
+
+    const passSpan = container.querySelector('.progress-pass');
+    if (passSpan && ev.currentPass && ev.totalPasses > 1) {
+      passSpan.textContent = 'Pass ' + ev.currentPass + '/' + ev.totalPasses;
+      passSpan.style.display = '';
+    }
+  });
+
+  // Also patch segmented multi-pass bars (dashboard/queue job cards).
+  containers.forEach(container => {
+    const segments = container.querySelectorAll('.progress-segment');
+    if (segments.length > 0 && ev.currentPass && ev.totalPasses > 1) {
+      let pctSoFar = 0;
+      for (let i = 0; i < ev.currentPass - 1; i++) {
+        if (segments[i]) segments[i].className = 'progress-segment completed';
+        pctSoFar++;
+      }
+      // Active segment: fill based on percent within current pass.
+      const perPass = 100 / ev.totalPasses;
+      const within = ev.percent - ((ev.currentPass - 1) * perPass);
+      const activeIdx = ev.currentPass - 1;
+      if (segments[activeIdx]) {
+        segments[activeIdx].className = 'progress-segment active';
+        segments[activeIdx].style.width = within + '%';
+      }
+      // Completed segments get full share.
+      for (let i = 0; i < ev.currentPass - 1; i++) {
+        if (segments[i]) segments[i].style.width = perPass + '%';
+      }
+      // Pending segments.
+      for (let i = ev.currentPass; i < segments.length; i++) {
+        if (segments[i]) {
+          segments[i].className = 'progress-segment pending';
+          segments[i].style.width = perPass + '%';
+        }
+      }
+    }
+  });
+}
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
@@ -89,20 +160,22 @@ function initSSE() {
       refreshCurrentView();
     },
     onJob: (ev) => {
-      // Update inline progress if the event carries progress data
+      // Always update shared progress store.
+      updateProgressState(ev);
+      // Patch DOM progress bars in all views (Devices, Dashboard, Queue).
       if (ev.devicePath && ev.percent !== undefined) {
-        updateInlineProgress(ev);
+        patchProgressDOM(ev);
       }
-      // Full refresh on terminal states or when no progress data
+      // Full refresh on terminal states.
       if (ev.status === 'completed' || ev.status === 'failed' || ev.status === 'cancelled' || ev.status === 'queued') {
         refreshCurrentView();
       }
     },
     onProgress: (ev) => {
       if (ev.message) logEvent(ev.message);
-      // Update progress bar in all views that show device rows
+      updateProgressState(ev);
       if (ev.devicePath) {
-        updateInlineProgress(ev);
+        patchProgressDOM(ev);
       }
       if (ev.status === 'completed' || ev.status === 'failed' || ev.status === 'cancelled') {
         refreshCurrentView();
@@ -129,20 +202,7 @@ function refreshCurrentView() {
   }
 }
 
-function updateInlineProgress(ev) {
-  const rows = document.querySelectorAll(`tr.clickable[data-device="${ev.devicePath}"]`);
-  rows.forEach(row => {
-    const progressCell = row.cells[4];
-    if (progressCell && ev.percent !== undefined) {
-      progressCell.innerHTML = `
-        <div style="display:flex;align-items:center;gap:8px">
-          <progress value="${ev.percent}" max="100"></progress>
-          <span style="font-size:.78rem;font-weight:600">${ev.percent.toFixed(1)}%</span>
-          ${ev.currentPass && ev.totalPasses > 1 ? `<span style="font-size:.72rem;color:var(--color-text-dim)">Pass ${ev.currentPass}/${ev.totalPasses}</span>` : ''}
-        </div>`;
-    }
-  });
-}
+
 
 function initTopbarButtons() {
   document.getElementById('btn-theme-toggle').addEventListener('click', () => {

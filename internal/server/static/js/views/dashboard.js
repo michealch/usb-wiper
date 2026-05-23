@@ -1,4 +1,5 @@
 // Dashboard view
+import { progressMap } from '../app.js';
 
 let devices = [];
 let jobs = [];
@@ -27,21 +28,26 @@ function renderDashboard() {
         <div style="max-height:400px;overflow-y:auto">
           <table>
             <thead><tr><th>Device</th><th>Scheme</th><th>Status</th><th>Progress</th><th>Created</th></tr></thead>
-            <tbody>${jobs.slice(0, 20).map(j => `
-              <tr>
+            <tbody>${jobs.slice(0, 20).map(j => {
+              const ps = progressMap.get(j.devicePath);
+              const dispProgress = (ps && (j.status === 'running' || j.status === 'verifying')) ? ps.percent : (j.progress || 0);
+              const dispPass = (ps && (j.status === 'running' || j.status === 'verifying')) ? ps.currentPass : j.currentPass;
+              const dispTotal = (ps && (j.status === 'running' || j.status === 'verifying')) ? ps.totalPasses : j.totalPasses;
+              return `
+              <tr data-device="${escapeAttr(j.devicePath)}">
                 <td style="font-family:var(--font-mono)">${j.devicePath}</td>
                 <td>${j.schemeId}</td>
                 <td><span class="badge ${jobBadgeClass(j.status)}">${j.status}</span></td>
                 <td class="progress-cell">
                   ${j.status === 'running' || j.status === 'verifying' ? `
                     <div style="display:flex;align-items:center;gap:8px">
-                      <progress value="${j.progress || 0}" max="100"></progress>
-                      <span style="font-size:.78rem;font-weight:600">${(j.progress || 0).toFixed(1)}%</span>
-                      ${j.totalPasses > 1 ? `<span style="font-size:.72rem;color:var(--color-text-dim)">Pass ${j.currentPass}/${j.totalPasses}</span>` : ''}
+                      <progress value="${dispProgress}" max="100"></progress>
+                      <span class="progress-pct" style="font-size:.78rem;font-weight:600">${dispProgress.toFixed(1)}%</span>
+                      ${dispTotal > 1 ? `<span class="progress-pass" style="font-size:.72rem;color:var(--color-text-dim)">Pass ${dispPass}/${dispTotal}</span>` : ''}
                     </div>` : j.status === 'completed' ? '100%' : '—'}
                 </td>
                 <td style="font-size:.78rem;color:var(--color-text-dim)">${new Date(j.createdAt).toLocaleString()}</td>
-              </tr>`).join('')}</tbody>
+              </tr>`}).join('')}</tbody>
           </table>
         </div>
       `}
@@ -74,20 +80,24 @@ function renderDashboard() {
 }
 
 function jobCard(j) {
+  const ps = progressMap.get(j.devicePath);
+  const dispProgress = ps ? ps.percent : (j.progress || 0);
+  const dispPass = ps ? ps.currentPass : j.currentPass;
+  const dispTotal = ps ? ps.totalPasses : j.totalPasses;
   return `
-    <div class="job-card">
+    <div class="job-card" data-device="${escapeAttr(j.devicePath)}">
       <div class="job-card-header">
         <div>
           <span class="job-card-device">${j.devicePath}</span>
-          <span class="job-card-scheme ml-2">${j.schemeId}${j.totalPasses > 1 ? ` · Pass ${j.currentPass}/${j.totalPasses}` : ''}</span>
+          <span class="job-card-scheme ml-2">${j.schemeId}${dispTotal > 1 ? ` · <span class="progress-pass">Pass ${dispPass}/${dispTotal}</span>` : ''}</span>
         </div>
         <span class="badge ${jobBadgeClass(j.status)}">${j.status}</span>
       </div>
       <div class="progress-multi mb-2">
-        ${j.totalPasses > 1 ? multiPassBar(j) : `<div class="progress-segment active" style="width:${Math.max(j.progress || 0, 1)}%"></div><div class="progress-segment pending" style="width:${100 - Math.max(j.progress || 0, 1)}%"></div>`}
+        ${dispTotal > 1 ? multiPassBarSegments(dispPass, dispTotal, dispProgress) : `<div class="progress-segment active" style="width:${Math.max(dispProgress, 1)}%"></div><div class="progress-segment pending" style="width:${100 - Math.max(dispProgress, 1)}%"></div>`}
       </div>
       <div class="progress-info">
-        <span>${(j.progress || 0).toFixed(1)}%</span>
+        <span class="progress-pct">${dispProgress.toFixed(1)}%</span>
         ${j.label ? `<span class="badge badge-info">${j.label}</span>` : ''}
         <button class="btn btn-ghost btn-sm" style="margin-left:auto" onclick="import('../api.js').then(m=>m.apiPost('/api/jobs/${j.id}/cancel')).then(()=>import('./toast.js').then(m2=>m2.showToast('Cancelling ${j.devicePath}...','info')))">Cancel</button>
       </div>
@@ -95,16 +105,26 @@ function jobCard(j) {
   `;
 }
 
-function multiPassBar(j) {
+function multiPassBarSegments(currentPass, totalPasses, overallPercent) {
   let html = '';
-  for (let p = 1; p <= j.totalPasses; p++) {
+  const perPass = 100 / totalPasses;
+  for (let p = 1; p <= totalPasses; p++) {
     let cls = 'pending';
-    let w = 100 / j.totalPasses;
-    if (p < j.currentPass) cls = 'completed';
-    else if (p === j.currentPass) cls = 'active';
+    let w = perPass;
+    if (p < currentPass) cls = 'completed';
+    else if (p === currentPass) {
+      cls = 'active';
+      // Width is percent consumed within the current pass only.
+      w = overallPercent - ((currentPass - 1) * perPass);
+      w = Math.max(1, Math.min(w, perPass));
+    }
     html += `<div class="progress-segment ${cls}" style="width:${w}%"></div>`;
   }
   return html;
+}
+
+function escapeAttr(s) {
+  return s.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function jobBadgeClass(status) {

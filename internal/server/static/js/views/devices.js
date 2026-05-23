@@ -69,7 +69,8 @@ function renderDevices() {
               progressHtml = `
                 <div style="display:flex;align-items:center;gap:8px">
                   <progress value="${job.progress || 0}" max="100"></progress>
-                  <span style="font-size:.78rem;font-weight:600">${(job.progress || 0).toFixed(1)}%</span>
+                  <span class="progress-pct" style="font-size:.78rem;font-weight:600">${(job.progress || 0).toFixed(1)}%</span>
+                  ${job.totalPasses > 1 ? `<span class="progress-pass" style="font-size:.72rem;color:var(--color-text-dim)">Pass ${job.currentPass}/${job.totalPasses}</span>` : ''}
                 </div>`;
             } else if (d.wipeHistory && d.wipeHistory.status === 'completed') {
               progressHtml = '<span style="color:var(--color-success);font-weight:600">100%</span>';
