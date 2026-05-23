@@ -1,4 +1,14 @@
 
+## [0.5.6] - 2026-05-23
+
+
+### Documentation
+
+- Rewrite AGENTS.md with code-verified specification
+
+
+
+
 ## [0.5.5] - 2026-05-22
 
 
