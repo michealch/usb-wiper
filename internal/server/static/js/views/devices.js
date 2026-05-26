@@ -160,8 +160,10 @@ async function wipeAllEligible() {
     onConfirm: async () => {
       try {
         const result = await apiPost('/api/wipe', { devices: eligible.map(d => d.path), schemeId: 'zero' });
-        showToast(`Started wiping ${result.started.length} devices`, 'success');
-        if (result.conflicts.length > 0) showToast(`${result.conflicts.length} devices skipped (already active)`, 'warning');
+        const started = Array.isArray(result.started) ? result.started : [];
+        const conflicts = Array.isArray(result.conflicts) ? result.conflicts : [];
+        showToast(`Started wiping ${started.length} devices`, 'success');
+        if (conflicts.length > 0) showToast(`${conflicts.length} devices skipped (already active)`, 'warning');
       } catch (err) { showToast(err.message, 'error'); }
     }
   });

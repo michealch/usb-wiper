@@ -132,7 +132,7 @@ func (s *Server) handleGetHistory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Devices      []string `json:"devices"`
-		Device       string   `json:"device"`       // legacy single-device
+		Device       string   `json:"device"` // legacy single-device
 		SchemeID     string   `json:"schemeId"`
 		PresetID     string   `json:"presetId"`
 		AutoFormat   bool     `json:"autoFormat"`
@@ -188,8 +188,8 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 		verifySizeGB = *req.VerifySizeGB
 	}
 
-	var started []string
-	var conflicts []string
+	started := []string{}
+	conflicts := []string{}
 
 	for _, dev := range devicePaths {
 		// Safety check
