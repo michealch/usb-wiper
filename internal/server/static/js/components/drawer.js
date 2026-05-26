@@ -53,21 +53,21 @@ function initDrawer() {
   });
 }
 
-function openDrawer(device) {
+function openDrawer(device, initialTab = 'overview') {
   currentDevice = device;
   drawerTitle.textContent = device.name || device.path;
-  activeTab = 'overview';
+  activeTab = initialTab;
   
   // Reset tabs
   document.querySelectorAll('.drawer-tab').forEach(t => t.classList.remove('active'));
-  document.querySelector('.drawer-tab[data-tab="overview"]').classList.add('active');
+  document.querySelector(`.drawer-tab[data-tab="${activeTab}"]`).classList.add('active');
   document.querySelectorAll('.drawer-tab-content').forEach(c => c.classList.remove('active'));
-  document.getElementById('tab-overview').classList.add('active');
+  document.getElementById('tab-' + activeTab).classList.add('active');
   
   drawerOverlay.classList.add('open');
   drawerEl.classList.add('open');
   
-  loadTabContent(device, 'overview');
+  loadTabContent(device, activeTab);
 }
 
 function closeDrawer() {
@@ -88,15 +88,15 @@ function loadTabContent(device, tab) {
 function renderOverviewTab(d) {
   const el = document.getElementById('tab-overview');
   el.innerHTML = `
-    <div class="form-group"><label>Device Path</label><div style="font-family:var(--font-mono)">${d.path}</div></div>
-    <div class="form-group"><label>Model</label><div>${d.model || '—'}</div></div>
-    <div class="form-group"><label>Serial</label><div>${d.serial || '—'}</div></div>
+    <div class="form-group"><label>Device Path</label><div style="font-family:var(--font-mono)">${escapeHtml(d.path)}</div></div>
+    <div class="form-group"><label>Model</label><div>${escapeHtml(d.model || '—')}</div></div>
+    <div class="form-group"><label>Serial</label><div>${escapeHtml(d.serial || '—')}</div></div>
     <div class="form-group"><label>Size</label><div>${formatBytes(d.sizeBytes)}</div></div>
     <div class="form-group"><label>Removable</label><div>${d.removable ? 'Yes' : 'No'}</div></div>
     <div class="form-group"><label>USB</label><div>${d.isUSB ? 'Yes' : 'No'}</div></div>
-    <div class="form-group"><label>Mounted</label><div>${d.mounted ? d.mountPoints.join(', ') : 'No'}</div></div>
-    ${d.wipeBlocked ? `<div class="form-group"><label>Block Reason</label><div class="text-danger">${d.blockReason || 'Blocked'}</div></div>` : ''}
-    ${d.wipeHistory ? `<div class="form-group"><label>Last Wipe</label><div>${d.wipeHistory.status} ${d.wipeHistory.verification === 'passed' ? '✓' : d.wipeHistory.verification === 'failed' ? '✗' : ''}</div></div>` : ''}
+    <div class="form-group"><label>Mounted</label><div>${d.mounted ? escapeHtml(d.mountPoints.join(', ')) : 'No'}</div></div>
+    ${d.wipeBlocked ? `<div class="form-group"><label>Block Reason</label><div class="text-danger">${escapeHtml(d.blockReason || 'Blocked')}</div></div>` : ''}
+    ${d.wipeHistory ? `<div class="form-group"><label>Last Wipe</label><div>${escapeHtml(d.wipeHistory.status)} ${d.wipeHistory.verification === 'passed' ? '✓' : d.wipeHistory.verification === 'failed' ? '✗' : ''}</div></div>` : ''}
   `;
 }
 
@@ -110,23 +110,66 @@ async function renderSmartTab(device) {
       deviceHealthCache[device.path] = data;
     }
     const h = deviceHealthCache[device.path];
-    const rows = [
-      ['Status', h.healthStatus || 'UNKNOWN'],
-      ['Model', h.modelName || '—'],
-      ['Serial', h.serialNumber || '—'],
-      ['Firmware', h.firmwareVersion || '—'],
-      ['Capacity', formatBytes(h.capacityBytes)],
-      ['Power On Hours', h.powerOnHours ? h.powerOnHours.toLocaleString() : '—'],
-      ['Power Cycles', h.powerCycleCount ? h.powerCycleCount.toLocaleString() : '—'],
-      ['Temperature', h.temperatureC ? h.temperatureC + '°C' : '—'],
+    el.innerHTML = renderHealthTable(h);
+  } catch (e) {
+    el.innerHTML = `<p class="muted">SMART data unavailable</p><p class="muted">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderHealthTable(h) {
+  const nvmeLog = getNVMeLog(h);
+  const isNVMe = h.deviceType === 'nvme' || !!nvmeLog;
+  const rows = [
+    ['Status', h.healthStatus || 'UNKNOWN'],
+    ['Bridge Mode', h.deviceType || (h.raw && h.raw.usb_wiper_smartctl_type) || 'auto'],
+    ['Model', h.modelName || '—'],
+    ['Serial', h.serialNumber || '—'],
+    ['Firmware', h.firmwareVersion || '—'],
+    ['Capacity', formatBytes(h.capacityBytes)],
+    ['Power On Hours', h.powerOnHours ? h.powerOnHours.toLocaleString() : '—'],
+    ['Power Cycles', h.powerCycleCount ? h.powerCycleCount.toLocaleString() : '—'],
+    ['Temperature', h.temperatureC ? h.temperatureC + '°C' : '—'],
+  ];
+
+  if (isNVMe) {
+    rows.push(
+      ['Spare Available', formatPercent(h.availableSparePct, nvmeLog && nvmeLog.available_spare)],
+      ['Endurance Used', formatPercent(h.enduranceUsedPct, nvmeLog && nvmeLog.percentage_used)],
+      ['Data Read', h.readLBAs ? formatNVMeDataUnits(h.readLBAs) : '—'],
+      ['Data Written', h.writeLBAs ? formatNVMeDataUnits(h.writeLBAs) : '—'],
+      ['Media Errors', h.uncorrectableErrors != null ? h.uncorrectableErrors.toLocaleString() : '—']
+    );
+  } else {
+    rows.push(
       ['Reallocated', h.reallocatedSectors ? h.reallocatedSectors.toLocaleString() : '0'],
       ['Pending', h.pendingSectors ? h.pendingSectors.toLocaleString() : '0'],
-      ['Uncorrectable', h.uncorrectableErrors ? h.uncorrectableErrors.toLocaleString() : '0'],
-    ];
-    el.innerHTML = `<table>${rows.map(([k,v]) => `<tr><td style="font-weight:600;color:var(--color-text-dim);width:130px">${k}</td><td>${v}</td></tr>`).join('')}</table>`;
-  } catch (e) {
-    el.innerHTML = '<p class="muted">SMART data unavailable</p>';
+      ['Uncorrectable', h.uncorrectableErrors ? h.uncorrectableErrors.toLocaleString() : '0']
+    );
   }
+
+  if (h.raw && h.raw.error) {
+    rows.push(['Probe Message', h.raw.error]);
+  }
+
+  return `<table class="smart-table">${rows.map(([k, v]) => `
+    <tr>
+      <td>${escapeHtml(k)}</td>
+      <td>${escapeHtml(String(v))}</td>
+    </tr>`).join('')}</table>`;
+}
+
+function getNVMeLog(h) {
+  if (!h || !h.raw) return null;
+  return h.raw.nvme_smart_health_log || h.raw.nvme_smart_health_information_log || null;
+}
+
+function formatPercent(normalized, rawValue) {
+  const value = normalized || rawValue;
+  return value !== undefined && value !== null && value !== '' ? value + '%' : '—';
+}
+
+function formatNVMeDataUnits(units) {
+  return formatBytes(units * 512000);
 }
 
 async function renderWipeTab(device) {
@@ -262,6 +305,12 @@ function formatBytes(bytes) {
   let i = 0, size = bytes;
   while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
   return size.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
 }
 
 import { apiGet, apiPost } from '../api.js';

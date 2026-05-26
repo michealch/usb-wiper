@@ -1,22 +1,28 @@
 package device
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // Health contains SMART/health information for a device.
 type Health struct {
 	HealthStatus        string                 `json:"healthStatus"`
+	DeviceType          string                 `json:"deviceType"`
 	PowerOnHours        uint64                 `json:"powerOnHours"`
 	PowerCycleCount     uint64                 `json:"powerCycleCount"`
 	TemperatureC        int                    `json:"temperatureC"`
 	ReadLBAs            uint64                 `json:"readLBAs"`
 	WriteLBAs           uint64                 `json:"writeLBAs"`
+	AvailableSparePct   int                    `json:"availableSparePct"`
+	EnduranceUsedPct    int                    `json:"enduranceUsedPct"`
 	ReallocatedSectors  uint64                 `json:"reallocatedSectors"`
 	PendingSectors      uint64                 `json:"pendingSectors"`
 	UncorrectableErrors uint64                 `json:"uncorrectableErrors"`
@@ -42,19 +48,13 @@ var smartDeviceTypes = []string{
 // Returns empty strings on failure (caller should fall back to sysfs).
 // Uses a short timeout to avoid blocking device enumeration.
 func GetSmartIdentity(devicePath string) (model, serial string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	bestScore := -1
+	bestModel := ""
+	bestSerial := ""
 
 	for _, dt := range smartDeviceTypes {
-		args := []string{"-i", "-j"}
-		if dt != "" {
-			args = append(args, "-d", dt)
-		}
-		args = append(args, devicePath)
-
-		cmd := exec.CommandContext(ctx, "smartctl", args...)
-		output, err := cmd.Output()
-		if err != nil || len(output) == 0 {
+		output, _, err := runSmartctlJSON("-i", devicePath, dt, 3*time.Second)
+		if err != nil && len(output) == 0 {
 			continue
 		}
 
@@ -63,35 +63,42 @@ func GetSmartIdentity(devicePath string) (model, serial string) {
 			continue
 		}
 
-		// Extract model and serial from JSON
+		attemptModel := ""
+		attemptSerial := ""
+
 		if m, ok := raw["model_name"].(string); ok && m != "" {
-			model = m
+			attemptModel = m
 		}
 		// Also check "device" -> "model" for USB bridges
-		if model == "" {
+		if attemptModel == "" {
 			if dev, ok := raw["device"].(map[string]interface{}); ok {
 				if m, ok := dev["model"].(string); ok {
-					model = m
+					attemptModel = m
 				}
 			}
 		}
 
 		if s, ok := raw["serial_number"].(string); ok && s != "" {
-			serial = s
+			attemptSerial = s
 		}
 
-		// If we got at least something, return it
-		if model != "" || serial != "" {
-			return
+		score := smartIdentityScore(raw, attemptModel, attemptSerial)
+		if score > bestScore {
+			bestScore = score
+			bestModel = attemptModel
+			bestSerial = attemptSerial
 		}
 
-		// Even without model/serial keys, if we got valid JSON with
-		// some device info, stop trying more -d flags
-		if hasAnyField(raw, "model_name", "model_family", "device", "firmware_version") {
-			return
+		// Full disk identity is enough. Bridge-only device metadata is not:
+		// a later -d snt* probe may expose the actual NVMe behind the bridge.
+		if score >= 30 {
+			return attemptModel, attemptSerial
 		}
 	}
 
+	if bestScore > 0 {
+		return bestModel, bestSerial
+	}
 	return "", ""
 }
 
@@ -99,55 +106,65 @@ func GetSmartIdentity(devicePath string) (model, serial string) {
 // It tries multiple smartctl -d flags to handle USB bridges that
 // don't support auto-detection (common with NVMe enclosures).
 func GetHealth(devicePath string) (*Health, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	var lastOutput []byte
 	var lastErr error
+	var lastStderr string
+	var best *Health
+	bestScore := -1
 
 	for _, dt := range smartDeviceTypes {
-		args := []string{"-a", "-j"}
-		if dt != "" {
-			args = append(args, "-d", dt)
-		}
-		args = append(args, devicePath)
-
-		cmd := exec.CommandContext(ctx, "smartctl", args...)
-		output, err := cmd.Output()
-		if err != nil {
-			// smartctl exits non-zero for many reasons; save output and try next type
-			lastOutput = output
-			lastErr = err
-			if len(output) > 0 {
-				// If we got JSON output despite the error, try to parse it
-				if parseResult := parseSmartJSON(output); parseResult != nil {
-					return parseResult, nil
-				}
-			}
-			continue
-		}
-
-		if len(output) == 0 {
-			continue
-		}
+		output, stderr, err := runSmartctlJSON("-a", devicePath, dt, 5*time.Second)
+		lastErr = err
+		lastStderr = strings.TrimSpace(string(stderr))
 
 		if health := parseSmartJSON(output); health != nil {
-			return health, nil
+			health.DeviceType = smartDeviceTypeLabel(dt)
+			if health.Raw != nil {
+				health.Raw["usb_wiper_smartctl_type"] = health.DeviceType
+			}
+			score := smartHealthScore(health)
+			if score > bestScore {
+				best = health
+				bestScore = score
+			}
+			if score >= 80 {
+				return health, nil
+			}
 		}
 	}
 
-	// All attempts failed
-	if lastOutput != nil && len(lastOutput) > 0 {
-		return &Health{
-			HealthStatus: "UNKNOWN",
-			Raw:          map[string]interface{}{"error": fmt.Sprintf("all device types failed: %v", lastErr)},
-		}, nil
+	if best != nil {
+		return best, nil
 	}
 
+	errText := fmt.Sprintf("smartctl error: %v", lastErr)
+	if lastStderr != "" {
+		errText += ": " + lastStderr
+	}
 	return &Health{
 		HealthStatus: "UNKNOWN",
-		Raw:          map[string]interface{}{"error": fmt.Sprintf("smartctl error: %v", lastErr)},
+		Raw:          map[string]interface{}{"error": errText},
 	}, nil
+}
+
+func runSmartctlJSON(mode, devicePath, deviceType string, timeout time.Duration) ([]byte, []byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	args := []string{mode, "-j"}
+	if deviceType != "" {
+		args = append(args, "-d", deviceType)
+	}
+	args = append(args, devicePath)
+
+	var stdout, stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "smartctl", args...)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		log.Printf("smartctl %s %s timed out for %s", mode, smartDeviceTypeLabel(deviceType), devicePath)
+	}
+	return stdout.Bytes(), stderr.Bytes(), err
 }
 
 // parseSmartJSON parses smartctl -j output into a Health struct.
@@ -191,10 +208,8 @@ func parseSmartJSON(output []byte) *Health {
 	}
 
 	// ---- Capacity ----
-	if userCap, ok := raw["user_capacity"].(string); ok {
-		if capBytes, err := parseCapacity(userCap); err == nil {
-			h.CapacityBytes = capBytes
-		}
+	if capBytes, ok := parseCapacityValue(raw["user_capacity"]); ok {
+		h.CapacityBytes = capBytes
 	}
 
 	// ---- NVMe SMART/Health Information Log ----
@@ -209,22 +224,22 @@ func parseSmartJSON(output []byte) *Health {
 	// ---- Temperature (top-level, set by smartctl for all device types) ----
 	// NVMe: smartctl copies temperature => current into top-level "temperature"
 	if temp, ok := raw["temperature"].(map[string]interface{}); ok {
-		if current, ok := temp["current"].(float64); ok {
+		if current := safeUint(temp["current"]); current > 0 {
 			h.TemperatureC = int(current)
 		}
 	}
 
 	// ---- Power on hours (top-level, set by smartctl for all device types) ----
 	if poh, ok := raw["power_on_time"].(map[string]interface{}); ok {
-		if hours, ok := poh["hours"].(float64); ok {
-			h.PowerOnHours = uint64(hours)
+		if hours := safeUint(poh["hours"]); hours > 0 {
+			h.PowerOnHours = hours
 		}
 	}
 
 	// ---- Power cycle count (top-level, set by smartctl for all device types) ----
 	// NVMe: smartctl copies nvme*.power_cycles => top-level power_cycle_count
-	if pcc, ok := raw["power_cycle_count"].(float64); ok {
-		h.PowerCycleCount = uint64(pcc)
+	if pcc := safeUint(raw["power_cycle_count"]); pcc > 0 {
+		h.PowerCycleCount = pcc
 	}
 
 	// ---- ATA/SATA attributes ----
@@ -274,21 +289,91 @@ func extractNVMeLog(raw map[string]interface{}) map[string]interface{} {
 // parseNVMeHealthLog extracts NVMe-specific health fields from the NVMe
 // SMART/Health Information Log (0x02).
 func parseNVMeHealthLog(h *Health, nvme map[string]interface{}) {
+	if h.DeviceType == "" {
+		h.DeviceType = "nvme"
+	}
+
 	// Data units read (each unit = 512 * 1000 bytes for NVMe 1.0)
 	// Mapped to ReadLBAs for reuse in the Health struct
-	if unitsRead, ok := nvme["data_units_read"].(float64); ok {
-		h.ReadLBAs = uint64(unitsRead)
+	if unitsRead := safeUint(nvme["data_units_read"]); unitsRead > 0 {
+		h.ReadLBAs = unitsRead
 	}
 
 	// Data units written
-	if unitsWritten, ok := nvme["data_units_written"].(float64); ok {
-		h.WriteLBAs = uint64(unitsWritten)
+	if unitsWritten := safeUint(nvme["data_units_written"]); unitsWritten > 0 {
+		h.WriteLBAs = unitsWritten
 	}
 
 	// Media errors (analogous to ATA uncorrectable errors)
-	if mediaErrs, ok := nvme["media_errors"].(float64); ok {
-		h.UncorrectableErrors = uint64(mediaErrs)
+	h.UncorrectableErrors = safeUint(nvme["media_errors"])
+
+	if spare := safeUint(nvme["available_spare"]); spare > 0 {
+		h.AvailableSparePct = int(spare)
 	}
+	if used := safeUint(nvme["percentage_used"]); used > 0 {
+		h.EnduranceUsedPct = int(used)
+	}
+	if temp := safeUint(nvme["temperature"]); temp > 0 && h.TemperatureC == 0 {
+		h.TemperatureC = int(temp)
+	}
+	if cycles := safeUint(nvme["power_cycles"]); cycles > 0 && h.PowerCycleCount == 0 {
+		h.PowerCycleCount = cycles
+	}
+	if hours := safeUint(nvme["power_on_hours"]); hours > 0 && h.PowerOnHours == 0 {
+		h.PowerOnHours = hours
+	}
+}
+
+func smartIdentityScore(raw map[string]interface{}, model, serial string) int {
+	score := 0
+	if model != "" {
+		score += 10
+	}
+	if serial != "" {
+		score += 10
+	}
+	if hasAnyField(raw, "model_name", "serial_number", "firmware_version") {
+		score += 10
+	}
+	if extractNVMeLog(raw) != nil {
+		score += 20
+	}
+	return score
+}
+
+func smartHealthScore(h *Health) int {
+	if h == nil || h.Raw == nil {
+		return 0
+	}
+	score := 0
+	if h.ModelName != "" || h.SerialNumber != "" {
+		score += 5
+	}
+	if _, ok := h.Raw["smart_status"].(map[string]interface{}); ok {
+		score += 30
+	}
+	if extractNVMeLog(h.Raw) != nil {
+		score += 80
+	}
+	if ata, ok := h.Raw["ata_smart_attributes"].(map[string]interface{}); ok {
+		if table, ok := ata["table"].([]interface{}); ok && len(table) > 0 {
+			score += 80
+		}
+	}
+	if h.TemperatureC > 0 {
+		score += 10
+	}
+	if h.PowerOnHours > 0 || h.PowerCycleCount > 0 {
+		score += 10
+	}
+	return score
+}
+
+func smartDeviceTypeLabel(deviceType string) string {
+	if deviceType == "" {
+		return "auto"
+	}
+	return deviceType
 }
 
 // hasAnyField returns true if the map contains at least one of the given keys.
@@ -308,27 +393,51 @@ func safeFloat(v interface{}) float64 {
 	case int:
 		return float64(val)
 	case string:
-		f, _ := strconv.ParseFloat(val, 64)
+		f, _ := strconv.ParseFloat(strings.ReplaceAll(val, ",", ""), 64)
 		return f
 	default:
 		return 0
 	}
 }
 
-func parseCapacity(s string) (uint64, error) {
-	// Handle "8,000,000,000 bytes [8.00 GB]" format
-	var bytes uint64
-	var unit string
-	_, err := fmt.Sscanf(s, "%d %s", &bytes, &unit)
-	if err != nil {
-		// Try basic number parsing
-		clean := ""
-		for _, c := range s {
-			if c >= '0' && c <= '9' {
-				clean += string(c)
-			}
-		}
-		return strconv.ParseUint(clean, 10, 64)
+func safeUint(v interface{}) uint64 {
+	f := safeFloat(v)
+	if f <= 0 {
+		return 0
 	}
-	return bytes, nil
+	return uint64(f)
+}
+
+func parseCapacityValue(v interface{}) (uint64, bool) {
+	switch val := v.(type) {
+	case string:
+		capBytes, err := parseCapacity(val)
+		return capBytes, err == nil
+	case map[string]interface{}:
+		if capBytes := safeUint(val["bytes"]); capBytes > 0 {
+			return capBytes, true
+		}
+		if blocks := safeUint(val["blocks"]); blocks > 0 {
+			return blocks * 512, true
+		}
+	}
+	return 0, false
+}
+
+func parseCapacity(s string) (uint64, error) {
+	// Handle "8,000,000,000 bytes [8.00 GB]" and "8000000000 bytes".
+	lower := strings.ToLower(s)
+	if idx := strings.Index(lower, "bytes"); idx >= 0 {
+		s = s[:idx]
+	}
+	clean := ""
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			clean += string(c)
+		}
+	}
+	if clean == "" {
+		return 0, fmt.Errorf("no byte count in %q", s)
+	}
+	return strconv.ParseUint(clean, 10, 64)
 }

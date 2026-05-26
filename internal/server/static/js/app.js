@@ -189,17 +189,39 @@ function refreshCurrentView() {
     case 'dashboard':
     case 'devices':
       // Both views need devices + jobs — fetch once and pass to each renderer.
-      Promise.all([apiGet('/api/devices'), apiGet('/api/jobs')]).then(([d, j]) => {
-        const devices = d.devices || [];
-        const jobs = j.jobs || [];
+      loadDevicesAndJobs().then(({ devices, jobs }) => {
         if (currentRoute === 'dashboard') updateDashboard(devices, jobs);
         else updateDevices(devices, jobs);
-      }).catch(() => {});
+      });
       break;
     case 'queue':
       apiGet('/api/jobs').then(j => updateQueue(j.jobs || [])).catch(() => {});
       break;
   }
+}
+
+async function loadDevicesAndJobs() {
+  const [deviceResult, jobResult] = await Promise.allSettled([
+    apiGet('/api/devices'),
+    apiGet('/api/jobs')
+  ]);
+
+  let devices = [];
+  let jobs = [];
+
+  if (deviceResult.status === 'fulfilled') {
+    devices = deviceResult.value.devices || [];
+  } else {
+    logEvent('Device list unavailable: ' + deviceResult.reason.message, 'error');
+  }
+
+  if (jobResult.status === 'fulfilled') {
+    jobs = jobResult.value.jobs || [];
+  } else {
+    logEvent('Job list unavailable: ' + jobResult.reason.message, 'error');
+  }
+
+  return { devices, jobs };
 }
 
 
