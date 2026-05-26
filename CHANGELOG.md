@@ -1,4 +1,14 @@
 
+## [0.5.7] - 2026-05-26
+
+
+### Fixed
+
+- Improve usb nvme smart reporting
+
+
+
+
 ## [0.5.6] - 2026-05-23
 
 
