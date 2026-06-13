@@ -1,3 +1,3 @@
 module github.com/usb-wiper
 
-go 1.26
+go 1.26.4
