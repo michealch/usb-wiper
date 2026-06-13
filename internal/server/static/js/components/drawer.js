@@ -5,6 +5,7 @@ let currentDevice = null;
 let activeTab = 'overview';
 let deviceHealthCache = {};
 let deviceHistoryCache = {};
+let deviceHealthHistoryCache = {};
 
 function initDrawer() {
   drawerOverlay = document.createElement('div');
@@ -17,19 +18,17 @@ function initDrawer() {
   drawerEl.innerHTML = `
     <div class="drawer-header">
       <h2 id="drawer-title">Device Details</h2>
-      <button class="btn btn-ghost btn-sm" id="drawer-close">&times;</button>
+      <button class="btn btn-ghost btn-sm" id="drawer-close" aria-label="Close drawer">×</button>
     </div>
-    <div class="drawer-tabs" id="drawer-tabs">
-      <button class="drawer-tab active" data-tab="overview">Overview</button>
-      <button class="drawer-tab" data-tab="smart">SMART</button>
-      <button class="drawer-tab" data-tab="wipe">Wipe</button>
-      <button class="drawer-tab" data-tab="history">History</button>
+    <div class="drawer-tabs" id="drawer-tabs" role="tablist">
+      <button class="drawer-tab active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview" id="drawer-tab-overview">Overview</button>
+      <button class="drawer-tab" data-tab="smart" role="tab" aria-selected="false" aria-controls="tab-smart" id="drawer-tab-smart">SMART</button>
+      <button class="drawer-tab" data-tab="history" role="tab" aria-selected="false" aria-controls="tab-history" id="drawer-tab-history">History</button>
     </div>
     <div class="drawer-body" id="drawer-body">
-      <div class="drawer-tab-content active" id="tab-overview"></div>
-      <div class="drawer-tab-content" id="tab-smart"></div>
-      <div class="drawer-tab-content" id="tab-wipe"></div>
-      <div class="drawer-tab-content" id="tab-history"></div>
+      <div class="drawer-tab-content active" id="tab-overview" role="tabpanel" aria-labelledby="drawer-tab-overview"></div>
+      <div class="drawer-tab-content" id="tab-smart" role="tabpanel" aria-labelledby="drawer-tab-smart"></div>
+      <div class="drawer-tab-content" id="tab-history" role="tabpanel" aria-labelledby="drawer-tab-history"></div>
     </div>
   `;
   
@@ -41,26 +40,42 @@ function initDrawer() {
   drawerBody = document.getElementById('drawer-body');
   
   // Tab switching
-  document.querySelectorAll('.drawer-tab').forEach(tab => {
-    tab.onclick = () => {
-      document.querySelectorAll('.drawer-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      activeTab = tab.dataset.tab;
-      document.querySelectorAll('.drawer-tab-content').forEach(c => c.classList.remove('active'));
-      document.getElementById('tab-' + activeTab).classList.add('active');
-      if (currentDevice) loadTabContent(currentDevice, activeTab);
+  const tabs = Array.from(document.querySelectorAll('.drawer-tab'));
+  tabs.forEach((tab, idx) => {
+    tab.onclick = () => activateTab(tab);
+    tab.onkeydown = (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const dir = e.key === 'ArrowRight' ? 1 : -1;
+        const next = tabs[(idx + dir + tabs.length) % tabs.length];
+        activateTab(next);
+        next.focus();
+      }
     };
   });
+
+  function activateTab(tab) {
+    tabs.forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
+    tab.classList.add('active');
+    tab.setAttribute('aria-selected', 'true');
+    activeTab = tab.dataset.tab;
+    document.querySelectorAll('.drawer-tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('tab-' + activeTab).classList.add('active');
+    if (currentDevice) loadTabContent(currentDevice, activeTab);
+  }
 }
 
 function openDrawer(device, initialTab = 'overview') {
   currentDevice = device;
   drawerTitle.textContent = device.name || device.path;
-  activeTab = initialTab;
-  
+
   // Reset tabs
-  document.querySelectorAll('.drawer-tab').forEach(t => t.classList.remove('active'));
-  document.querySelector(`.drawer-tab[data-tab="${activeTab}"]`).classList.add('active');
+  document.querySelectorAll('.drawer-tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
+  let targetTab = document.querySelector(`.drawer-tab[data-tab="${initialTab}"]`);
+  if (!targetTab) targetTab = document.querySelector('.drawer-tab[data-tab="overview"]');
+  activeTab = targetTab.dataset.tab;
+  targetTab.classList.add('active');
+  targetTab.setAttribute('aria-selected', 'true');
   document.querySelectorAll('.drawer-tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById('tab-' + activeTab).classList.add('active');
   
@@ -76,11 +91,16 @@ function closeDrawer() {
   currentDevice = null;
 }
 
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && drawerOverlay.classList.contains('open')) {
+    closeDrawer();
+  }
+});
+
 function loadTabContent(device, tab) {
   switch (tab) {
     case 'overview': renderOverviewTab(device); break;
     case 'smart': renderSmartTab(device); break;
-    case 'wipe': renderWipeTab(device); break;
     case 'history': renderHistoryTab(device); break;
   }
 }
@@ -89,14 +109,18 @@ function renderOverviewTab(d) {
   const el = document.getElementById('tab-overview');
   el.innerHTML = `
     <div class="form-group"><label>Device Path</label><div style="font-family:var(--font-mono)">${escapeHtml(d.path)}</div></div>
+    <div class="form-group"><label>Device ID</label><div style="font-family:var(--font-mono);overflow-wrap:anywhere">${escapeHtml(d.deviceId || '—')}</div></div>
+    <div class="form-group"><label>Identity</label><div>${escapeHtml(identityLabel(d))}</div></div>
     <div class="form-group"><label>Model</label><div>${escapeHtml(d.model || '—')}</div></div>
     <div class="form-group"><label>Serial</label><div>${escapeHtml(d.serial || '—')}</div></div>
+    <div class="form-group"><label>Firmware</label><div>${escapeHtml(d.firmware || '—')}</div></div>
+    <div class="form-group"><label>WWN</label><div>${escapeHtml(d.wwn || '—')}</div></div>
     <div class="form-group"><label>Size</label><div>${formatBytes(d.sizeBytes)}</div></div>
     <div class="form-group"><label>Removable</label><div>${d.removable ? 'Yes' : 'No'}</div></div>
     <div class="form-group"><label>USB</label><div>${d.isUSB ? 'Yes' : 'No'}</div></div>
-    <div class="form-group"><label>Mounted</label><div>${d.mounted ? escapeHtml(d.mountPoints.join(', ')) : 'No'}</div></div>
+    <div class="form-group"><label>Mounted</label><div>${d.mounted ? escapeHtml((d.mountPoints || []).join(', ')) : 'No'}</div></div>
     ${d.wipeBlocked ? `<div class="form-group"><label>Block Reason</label><div class="text-danger">${escapeHtml(d.blockReason || 'Blocked')}</div></div>` : ''}
-    ${d.wipeHistory ? `<div class="form-group"><label>Last Wipe</label><div>${escapeHtml(d.wipeHistory.status)} ${d.wipeHistory.verification === 'passed' ? '✓' : d.wipeHistory.verification === 'failed' ? '✗' : ''}</div></div>` : ''}
+    ${d.wipeHistory ? `<div class="form-group"><label>Last Wipe</label><div>${escapeHtml(d.wipeHistory.status)} ${d.wipeHistory.verification === 'passed' ? '\u2713' : d.wipeHistory.verification === 'failed' ? '\u2717' : ''}</div></div>` : ''}
   `;
 }
 
@@ -105,12 +129,13 @@ async function renderSmartTab(device) {
   el.innerHTML = '<p class="muted">Loading SMART data...</p>';
   
   try {
-    if (!deviceHealthCache[device.path]) {
+    const key = deviceCacheKey(device);
+    if (!deviceHealthCache[key]) {
       const data = await apiGet('/api/health?device=' + encodeURIComponent(device.path));
-      deviceHealthCache[device.path] = data;
+      deviceHealthCache[key] = data;
     }
-    const h = deviceHealthCache[device.path];
-    el.innerHTML = renderHealthTable(h);
+    const h = deviceHealthCache[key];
+    el.innerHTML = renderHealthTable(h) + await renderHealthHistory(device);
   } catch (e) {
     el.innerHTML = `<p class="muted">SMART data unavailable</p><p class="muted">${escapeHtml(e.message)}</p>`;
   }
@@ -172,120 +197,27 @@ function formatNVMeDataUnits(units) {
   return formatBytes(units * 512000);
 }
 
-async function renderWipeTab(device) {
-  const el = document.getElementById('tab-wipe');
-  el.innerHTML = '<p class="muted">Loading schemes...</p>';
-
-  try {
-    const schemes = await apiGet('/api/schemes');
-    const presets = await apiGet('/api/presets');
-
-    el.innerHTML = `
-      <div class="form-group">
-        <label>Wipe Scheme</label>
-        <select id="wipe-scheme" class="w-full">
-          ${schemes.schemes.map(s => `<option value="${s.id}">${s.displayName} (${s.passes} pass${s.passes>1?'es':''})</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Preset</label>
-        <select id="wipe-preset" class="w-full">
-          <option value="">— Manual —</option>
-          ${presets.presets.map(p => `<option value="${p.id}">${p.name} (${p.schemeId}, ${p.verifySizeGB}GiB verify)</option>`).join('')}
-        </select>
-      </div>
-      <div class="form-group">
-        <label class="checkbox-label">
-          <input type="checkbox" id="wipe-autoformat">Auto-format FAT32 after wipe
-        </label>
-      </div>
-      <div class="form-group">
-        <label>Verification</label>
-        <select id="wipe-verify" class="w-full">
-          <option value="0">Off</option>
-          <option value="1" selected>1 GiB</option>
-          <option value="2">2 GiB</option>
-          <option value="4">4 GiB</option>
-          <option value="16">16 GiB</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label>Label</label>
-        <input type="text" id="wipe-label" class="w-full" placeholder="Optional label (e.g. RMA-2026-05)">
-      </div>
-      <div class="btn-group" style="margin-top:var(--space-4)">
-        <button class="btn btn-danger" id="btn-start-wipe">Start Wipe</button>
-        <button class="btn btn-success" id="btn-test-wipe">Test Wipe (Read-Only)</button>
-      </div>
-    `;
-    
-    // Preset selection fills form
-    document.getElementById('wipe-preset').onchange = function() {
-      const preset = presets.presets.find(p => p.id === this.value);
-      if (preset) {
-        document.getElementById('wipe-scheme').value = preset.schemeId;
-        document.getElementById('wipe-autoformat').checked = preset.autoFormat;
-        document.getElementById('wipe-verify').value = preset.verifySizeGB;
-      }
-    };
-    
-    document.getElementById('btn-start-wipe').onclick = () => {
-      const scheme = document.getElementById('wipe-scheme').value;
-      const autoFormat = document.getElementById('wipe-autoformat').checked;
-      const verify = parseInt(document.getElementById('wipe-verify').value);
-      const label = document.getElementById('wipe-label').value;
-      
-      showConfirm(`DESTROY ALL DATA on ${device.path}?\n\nScheme: ${scheme}\nThis cannot be undone.`, {
-        dangerLabel: 'Wipe Device',
-        onConfirm: async () => {
-          try {
-            await apiPost('/api/wipe', {
-              devices: [device.path],
-              schemeId: scheme,
-              autoFormat,
-              verifySizeGB: verify,
-              label
-            });
-            showToast('Wipe started on ' + device.path, 'success');
-            closeDrawer();
-          } catch (e) {
-            showToast(e.message, 'error');
-          }
-        }
-      });
-    };
-    
-    document.getElementById('btn-test-wipe').onclick = async () => {
-      const verify = parseInt(document.getElementById('wipe-verify').value);
-      try {
-        await apiPost('/api/test-wipe', { device: device.path, verifySizeGB: verify });
-        showToast('Test wipe started on ' + device.path, 'info');
-        closeDrawer();
-      } catch (e) {
-        showToast(e.message, 'error');
-      }
-    };
-  } catch (e) {
-    el.innerHTML = '<p class="text-danger">Failed to load schemes</p>';
-  }
-}
-
 async function renderHistoryTab(device) {
   const el = document.getElementById('tab-history');
   el.innerHTML = '<p class="muted">Loading history...</p>';
   
   try {
-    if (!deviceHistoryCache[device.path]) {
-      const data = await apiGet('/api/history?device=' + encodeURIComponent(device.path));
-      deviceHistoryCache[device.path] = data.history || [];
+    if (!isTrustedIdentity(device)) {
+      el.innerHTML = '<p class="muted">This device identity is uncertain, so prior wipe history is not attached.</p>';
+      return;
     }
-    const history = deviceHistoryCache[device.path];
+    const key = deviceCacheKey(device);
+    if (!deviceHistoryCache[key]) {
+      const data = await apiGet('/api/history?deviceId=' + encodeURIComponent(device.deviceId));
+      deviceHistoryCache[key] = data.history || [];
+    }
+    const history = deviceHistoryCache[key];
     if (history.length === 0) {
       el.innerHTML = '<p class="muted">No wipe history for this device.</p>';
       return;
     }
     el.innerHTML = `<table>
-      <thead><tr><th>Status</th><th>Verification</th><th>Size</th><th>Duration</th><th>Finished</th></tr></thead>
+      <thead><tr><th scope="col">Status</th><th scope="col">Verification</th><th scope="col">Size</th><th scope="col">Duration</th><th scope="col">Finished</th></tr></thead>
       <tbody>${history.map(r => `
         <tr>
           <td><span class="badge ${r.status === 'completed' ? 'badge-success' : r.status === 'failed' ? 'badge-danger' : 'badge-neutral'}">${r.status}</span></td>
@@ -299,21 +231,51 @@ async function renderHistoryTab(device) {
   }
 }
 
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0, size = bytes;
-  while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
-  return size.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+async function renderHealthHistory(device) {
+  if (!isTrustedIdentity(device)) {
+    return '<p class="muted mt-3">SMART history is limited to this uncertain attachment.</p>';
+  }
+  const key = deviceCacheKey(device);
+  if (!deviceHealthHistoryCache[key]) {
+    const data = await apiGet('/api/health-history?deviceId=' + encodeURIComponent(device.deviceId));
+    deviceHealthHistoryCache[key] = data.history || [];
+  }
+  const history = deviceHealthHistoryCache[key].slice(0, 8);
+  if (history.length === 0) {
+    return '<p class="muted mt-3">No saved SMART snapshots yet.</p>';
+  }
+  return `
+    <h3 class="mt-4 mb-2">SMART History</h3>
+    <table>
+      <thead><tr><th scope="col">Captured</th><th scope="col">Status</th><th scope="col">Temp</th><th scope="col">Hours</th><th scope="col">Wear</th><th scope="col">Errors</th></tr></thead>
+      <tbody>${history.map(r => `
+        <tr>
+          <td>${r.capturedAt ? new Date(r.capturedAt).toLocaleString() : '—'}</td>
+          <td>${escapeHtml(r.healthStatus || 'UNKNOWN')}</td>
+          <td>${r.temperatureC ? escapeHtml(String(r.temperatureC)) + '°C' : '—'}</td>
+          <td>${r.powerOnHours ? Number(r.powerOnHours).toLocaleString() : '—'}</td>
+          <td>${r.enduranceUsedPct ? escapeHtml(String(r.enduranceUsedPct)) + '%' : '—'}</td>
+          <td>${r.uncorrectableErrors != null ? Number(r.uncorrectableErrors).toLocaleString() : '—'}</td>
+        </tr>`).join('')}</tbody>
+    </table>`;
 }
 
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
+function deviceCacheKey(device) {
+  return device.deviceId || device.path;
 }
 
-import { apiGet, apiPost } from '../api.js';
-import { showToast, showConfirm } from './toast.js';
+function isTrustedIdentity(device) {
+  return device && (device.identityConfidence === 'high' || device.identityConfidence === 'medium') && device.deviceId;
+}
+
+function identityLabel(device) {
+  const confidence = device.identityConfidence || 'unknown';
+  const source = device.identitySource || 'unknown';
+  if (confidence === 'low') return 'Uncertain — prior history is not attached (' + source + ')';
+  return confidence.charAt(0).toUpperCase() + confidence.slice(1) + ' confidence (' + source + ')';
+}
+
+import { apiGet } from '../api.js';
+import { escapeHtml, formatBytes } from '../util.js';
 
 export { initDrawer, openDrawer, closeDrawer, deviceHealthCache, deviceHistoryCache };
