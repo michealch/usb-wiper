@@ -11,14 +11,26 @@ async function apiGet(path) {
   return res.json();
 }
 
+async function readJsonBody(res) {
+  if (res.status === 204) return {};
+  const text = await res.text();
+  if (!text) return {};
+  try { return JSON.parse(text); }
+  catch (_) { return { error: text || res.statusText }; }
+}
+
 async function apiPost(path, body = {}) {
   const res = await fetch(BASE + path, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body)
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  const data = await readJsonBody(res);
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -28,8 +40,12 @@ async function apiPut(path, body = {}) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body)
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  const data = await readJsonBody(res);
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -78,14 +94,20 @@ function connectSSE(handlers = {}) {
   };
 
   eventSource.onopen = () => {
+    const wasDisconnected = reconnectFailures > 0;
     reconnectFailures = 0;
     reconnectDelay = 2000;
+    if (wasDisconnected) handlers.onConnectionChange && handlers.onConnectionChange('connected');
   };
 
   eventSource.onerror = () => {
     reconnectFailures++;
+    if (reconnectFailures === 1) {
+      handlers.onConnectionChange && handlers.onConnectionChange('reconnecting');
+    }
     if (reconnectFailures >= maxReconnectFailures) {
       logEvent('SSE connection lost after ' + maxReconnectFailures + ' attempts — refresh the page', 'error');
+      handlers.onConnectionChange && handlers.onConnectionChange('lost');
       return;
     }
     const delay = reconnectDelay;
@@ -100,16 +122,43 @@ function closeSSE() {
   if (eventSource) { eventSource.close(); eventSource = null; }
 }
 
+let logBuffer = [];
+const MAX_LOG = 200;
+let logCount = 0;
+
 function logEvent(msg, type = 'info') {
-  const logBody = document.getElementById('log-body');
-  if (!logBody) return;
   const time = new Date().toLocaleTimeString();
-  const entry = document.createElement('div');
-  entry.className = 'log-entry';
-  entry.innerHTML = `<span class="ts">[${time}]</span><span class="msg">${escapeHtml(msg)}</span>`;
-  logBody.prepend(entry);
-  // Keep last 100 entries
-  while (logBody.children.length > 100) logBody.lastChild.remove();
+  logBuffer.unshift({ time, msg, type });
+  if (logBuffer.length > MAX_LOG) logBuffer.length = MAX_LOG;
+  logCount++;
+
+  // Update visible status bar text
+  const statusText = document.getElementById('statusbar-text');
+  if (statusText) {
+    statusText.textContent = msg;
+    statusText.style.color = type === 'error' ? 'var(--color-danger)' : type === 'warning' ? 'var(--color-warning)' : '';
+    setTimeout(() => { if (statusText) statusText.style.color = ''; }, 4000);
+  }
+
+  // Update event count badge on status bar toggle
+  const badge = document.getElementById('statusbar-count');
+  if (badge) {
+    badge.textContent = logCount > 99 ? '99+' : String(logCount);
+    badge.style.display = '';
+  }
+
+  // Update detail panel if open
+  const detailEl = document.getElementById('statusbar-detail');
+  if (detailEl && detailEl.classList.contains('open')) {
+    renderLogDetail(detailEl);
+  }
+}
+
+function renderLogDetail(el) {
+  if (!el) return;
+  el.innerHTML = logBuffer.slice(0, 100).map(e =>
+    `<div style="display:flex;gap:8px;padding:1px 0;color:${e.type==='error'?'var(--color-danger)':e.type==='warning'?'var(--color-warning)':''}"><span style="flex-shrink:0;opacity:0.5">[${e.time}]</span><span>${escapeHtml(e.msg)}</span></div>`
+  ).join('');
 }
 
 function escapeHtml(s) {
@@ -118,4 +167,4 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
-export { apiGet, apiPost, apiPut, apiDelete, connectSSE, closeSSE, logEvent };
+export { apiGet, apiPost, apiPut, apiDelete, connectSSE, closeSSE, logEvent, renderLogDetail, logBuffer, MAX_LOG };

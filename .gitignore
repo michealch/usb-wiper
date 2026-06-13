@@ -1,7 +1,25 @@
-/bin
-/tmp
+# Build outputs
+/bin/
+/usb-wiper
 *.exe
-.DS_Store
+*.test
+
+# Test and coverage artifacts
+/coverage.out
+/coverage.html
+*.prof
+
+# Local runtime data
+/data/
+/tmp/
+/work/
+
+# Local environment files
 .env
 *.env
+
+# OS/editor/tool noise
+.DS_Store
 .pi-lens/
+.commandcode/
+.claude/

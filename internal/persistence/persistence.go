@@ -15,24 +15,29 @@ import (
 
 // WipeRecord represents a single wipe operation in history.
 type WipeRecord struct {
-	DevicePath    string    `json:"devicePath"`
-	DeviceModel   string    `json:"deviceModel"`
-	DeviceSerial  string    `json:"deviceSerial"`
-	SizeBytes     uint64    `json:"sizeBytes"`
-	Status        string    `json:"status"` // "completed", "failed", "cancelled"
-	Verification  string    `json:"verification,omitempty"` // "passed", "failed", or empty if not done/cancelled
-	Error         string    `json:"error,omitempty"`
-	BytesVerified uint64    `json:"bytesVerified"` // how many bytes were checked
-	StartedAt     time.Time `json:"startedAt"`
-	FinishedAt    time.Time `json:"finishedAt"`
-	Duration      string    `json:"duration"`
+	DevicePath         string    `json:"devicePath"`
+	DeviceID           string    `json:"deviceId,omitempty"`
+	IdentitySource     string    `json:"identitySource,omitempty"`
+	IdentityConfidence string    `json:"identityConfidence,omitempty"`
+	DeviceModel        string    `json:"deviceModel"`
+	DeviceSerial       string    `json:"deviceSerial"`
+	DeviceFirmware     string    `json:"deviceFirmware,omitempty"`
+	DeviceWWN          string    `json:"deviceWwn,omitempty"`
+	SizeBytes          uint64    `json:"sizeBytes"`
+	Status             string    `json:"status"`                 // "completed", "failed", "cancelled"
+	Verification       string    `json:"verification,omitempty"` // "passed", "failed", or empty if not done/cancelled
+	Error              string    `json:"error,omitempty"`
+	BytesVerified      uint64    `json:"bytesVerified"` // how many bytes were checked
+	StartedAt          time.Time `json:"startedAt"`
+	FinishedAt         time.Time `json:"finishedAt"`
+	Duration           string    `json:"duration"`
 }
 
 // Store provides thread-safe access to wipe history persisted as JSON.
 type Store struct {
-	mu       sync.RWMutex
-	dataDir  string
-	records  []WipeRecord
+	mu      sync.RWMutex
+	dataDir string
+	records []WipeRecord
 }
 
 // New creates or loads a persistence store from the given data directory.
@@ -126,7 +131,7 @@ func (s *Store) GetAll() []WipeRecord {
 	return result
 }
 
-// GetLatest returns the most recent record for a device, or nil.
+// GetLatest returns the most recent record for a device path, or nil.
 func (s *Store) GetLatest(devicePath string) *WipeRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -137,6 +142,40 @@ func (s *Store) GetLatest(devicePath string) *WipeRecord {
 		}
 	}
 	return nil
+}
+
+// GetLatestByDeviceID returns the most recent record for a trusted physical
+// device identity. Empty or low-confidence IDs should not be passed here.
+func (s *Store) GetLatestByDeviceID(deviceID string) *WipeRecord {
+	if deviceID == "" {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for i := len(s.records) - 1; i >= 0; i-- {
+		if s.records[i].DeviceID == deviceID {
+			r := s.records[i]
+			return &r
+		}
+	}
+	return nil
+}
+
+// GetByDeviceID returns records for a trusted physical device identity,
+// newest first.
+func (s *Store) GetByDeviceID(deviceID string) []WipeRecord {
+	if deviceID == "" {
+		return []WipeRecord{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := []WipeRecord{}
+	for i := len(s.records) - 1; i >= 0; i-- {
+		if s.records[i].DeviceID == deviceID {
+			result = append(result, s.records[i])
+		}
+	}
+	return result
 }
 
 // save atomically writes records to the history file using a temp file + rename.

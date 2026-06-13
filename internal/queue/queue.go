@@ -30,23 +30,31 @@ const (
 
 // Job represents a single wipe operation in the queue.
 type Job struct {
-	ID            string     `json:"id"`
-	DevicePath    string     `json:"devicePath"`
-	SchemeID      string     `json:"schemeId"`
-	AutoFormat    bool       `json:"autoFormat"`
-	VerifySizeGB  int        `json:"verifySizeGB"`
-	Label         string     `json:"label,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	StartedAt     *time.Time `json:"startedAt,omitempty"`
-	CompletedAt   *time.Time `json:"completedAt,omitempty"`
-	Status        JobStatus  `json:"status"`
-	Progress      float64    `json:"progress"`
-	CurrentPass   int        `json:"currentPass"`
-	TotalPasses   int        `json:"totalPasses"`
-	ErrorMessage  string     `json:"errorMessage,omitempty"`
-	Verified      string     `json:"verified,omitempty"`   // "passed", "failed"
-	BytesVerified uint64     `json:"bytesVerified"`
-	cancel        context.CancelFunc
+	ID                 string     `json:"id"`
+	DevicePath         string     `json:"devicePath"`
+	DeviceID           string     `json:"deviceId,omitempty"`
+	IdentitySource     string     `json:"identitySource,omitempty"`
+	IdentityConfidence string     `json:"identityConfidence,omitempty"`
+	DeviceModel        string     `json:"deviceModel,omitempty"`
+	DeviceSerial       string     `json:"deviceSerial,omitempty"`
+	DeviceFirmware     string     `json:"deviceFirmware,omitempty"`
+	DeviceWWN          string     `json:"deviceWwn,omitempty"`
+	DeviceSizeBytes    uint64     `json:"deviceSizeBytes,omitempty"`
+	SchemeID           string     `json:"schemeId"`
+	AutoFormat         bool       `json:"autoFormat"`
+	VerifySizeGB       int        `json:"verifySizeGB"`
+	Label              string     `json:"label,omitempty"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	StartedAt          *time.Time `json:"startedAt,omitempty"`
+	CompletedAt        *time.Time `json:"completedAt,omitempty"`
+	Status             JobStatus  `json:"status"`
+	Progress           float64    `json:"progress"`
+	CurrentPass        int        `json:"currentPass"`
+	TotalPasses        int        `json:"totalPasses"`
+	ErrorMessage       string     `json:"errorMessage,omitempty"`
+	Verified           string     `json:"verified,omitempty"` // "passed", "failed"
+	BytesVerified      uint64     `json:"bytesVerified"`
+	cancel             context.CancelFunc
 }
 
 // ProgressEvent sent via the SSE channel when queue state changes.
@@ -121,11 +129,19 @@ func (q *Queue) Start(ctx context.Context) {
 
 // EnqueueRequest contains all parameters needed to create a wipe job.
 type EnqueueRequest struct {
-	DevicePath   string `json:"devicePath"`
-	SchemeID     string `json:"schemeId"`
-	AutoFormat   bool   `json:"autoFormat"`
-	VerifySizeGB int    `json:"verifySizeGB"`
-	Label        string `json:"label,omitempty"`
+	DevicePath         string `json:"devicePath"`
+	DeviceID           string `json:"deviceId,omitempty"`
+	IdentitySource     string `json:"identitySource,omitempty"`
+	IdentityConfidence string `json:"identityConfidence,omitempty"`
+	DeviceModel        string `json:"deviceModel,omitempty"`
+	DeviceSerial       string `json:"deviceSerial,omitempty"`
+	DeviceFirmware     string `json:"deviceFirmware,omitempty"`
+	DeviceWWN          string `json:"deviceWwn,omitempty"`
+	DeviceSizeBytes    uint64 `json:"deviceSizeBytes,omitempty"`
+	SchemeID           string `json:"schemeId"`
+	AutoFormat         bool   `json:"autoFormat"`
+	VerifySizeGB       int    `json:"verifySizeGB"`
+	Label              string `json:"label,omitempty"`
 }
 
 // ErrJobAlreadyActive is returned when attempting to enqueue a job for
@@ -157,15 +173,35 @@ func (q *Queue) Enqueue(req EnqueueRequest) (*Job, error) {
 	}
 
 	job := &Job{
-		ID:           ulid.New(),
-		DevicePath:   req.DevicePath,
-		SchemeID:     req.SchemeID,
-		AutoFormat:   req.AutoFormat,
-		VerifySizeGB: req.VerifySizeGB,
-		Label:        req.Label,
-		CreatedAt:    time.Now(),
-		Status:       StatusQueued,
-		TotalPasses:  scheme.Passes(),
+		ID:                 ulid.New(),
+		DevicePath:         req.DevicePath,
+		DeviceID:           req.DeviceID,
+		IdentitySource:     req.IdentitySource,
+		IdentityConfidence: req.IdentityConfidence,
+		DeviceModel:        req.DeviceModel,
+		DeviceSerial:       req.DeviceSerial,
+		DeviceFirmware:     req.DeviceFirmware,
+		DeviceWWN:          req.DeviceWWN,
+		DeviceSizeBytes:    req.DeviceSizeBytes,
+		SchemeID:           req.SchemeID,
+		AutoFormat:         req.AutoFormat,
+		VerifySizeGB:       req.VerifySizeGB,
+		Label:              req.Label,
+		CreatedAt:          time.Now(),
+		Status:             StatusQueued,
+		TotalPasses:        scheme.Passes(),
+	}
+	if job.DeviceID == "" {
+		if dev, err := device.GetDevice(req.DevicePath); err == nil {
+			job.DeviceID = dev.DeviceID
+			job.IdentitySource = dev.IdentitySource
+			job.IdentityConfidence = dev.IdentityConfidence
+			job.DeviceModel = dev.Model
+			job.DeviceSerial = dev.Serial
+			job.DeviceFirmware = dev.Firmware
+			job.DeviceWWN = dev.WWN
+			job.DeviceSizeBytes = dev.SizeBytes
+		}
 	}
 
 	q.jobs[job.ID] = job
@@ -583,14 +619,14 @@ func (q *Queue) broadcastJob(job *Job) {
 	// Take a snapshot under lock, then broadcast without holding the lock.
 	q.mu.Lock()
 	ev := wipe.ProgressEvent{
-		EventType:  "job",
-		DevicePath: job.DevicePath,
-		Status:     string(job.Status),
-		Percent:    job.Progress,
-		CurrentPass: job.CurrentPass,
-		TotalPasses: job.TotalPasses,
+		EventType:    "job",
+		DevicePath:   job.DevicePath,
+		Status:       string(job.Status),
+		Percent:      job.Progress,
+		CurrentPass:  job.CurrentPass,
+		TotalPasses:  job.TotalPasses,
 		BytesWritten: job.BytesVerified,
-		Timestamp:  time.Now(),
+		Timestamp:    time.Now(),
 	}
 	q.mu.Unlock()
 
@@ -600,14 +636,14 @@ func (q *Queue) broadcastJob(job *Job) {
 func (q *Queue) broadcastJobLocked(job *Job) {
 	// Same as broadcastJob but caller already holds q.mu.
 	q.sseHub.Broadcast(wipe.ProgressEvent{
-		EventType:   "job",
-		DevicePath:  job.DevicePath,
-		Status:      string(job.Status),
-		Percent:     job.Progress,
-		CurrentPass: job.CurrentPass,
-		TotalPasses: job.TotalPasses,
+		EventType:    "job",
+		DevicePath:   job.DevicePath,
+		Status:       string(job.Status),
+		Percent:      job.Progress,
+		CurrentPass:  job.CurrentPass,
+		TotalPasses:  job.TotalPasses,
 		BytesWritten: job.BytesVerified,
-		Timestamp:   time.Now(),
+		Timestamp:    time.Now(),
 	})
 }
 

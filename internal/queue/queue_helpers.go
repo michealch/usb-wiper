@@ -35,11 +35,19 @@ func writeHistory(store *persistence.Store, job *Job) {
 		return
 	}
 	rec := persistence.WipeRecord{
-		DevicePath:    job.DevicePath,
-		Status:        string(job.Status),
-		Verification:  job.Verified,
-		Error:         job.ErrorMessage,
-		BytesVerified: job.BytesVerified,
+		DevicePath:         job.DevicePath,
+		DeviceID:           job.DeviceID,
+		IdentitySource:     job.IdentitySource,
+		IdentityConfidence: job.IdentityConfidence,
+		DeviceModel:        job.DeviceModel,
+		DeviceSerial:       job.DeviceSerial,
+		DeviceFirmware:     job.DeviceFirmware,
+		DeviceWWN:          job.DeviceWWN,
+		SizeBytes:          job.DeviceSizeBytes,
+		Status:             string(job.Status),
+		Verification:       job.Verified,
+		Error:              job.ErrorMessage,
+		BytesVerified:      job.BytesVerified,
 	}
 	if job.CreatedAt.IsZero() == false {
 		rec.StartedAt = job.CreatedAt

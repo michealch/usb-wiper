@@ -29,24 +29,24 @@ func TestAppendAndGetAll(t *testing.T) {
 
 	now := time.Now()
 	r1 := WipeRecord{
-		DevicePath:   "/dev/sdb",
-		DeviceModel:  "Test USB",
-		DeviceSerial: "ABC123",
-		SizeBytes:    8_000_000_000,
-		Status:       "completed",
-		Verification: "passed",
+		DevicePath:    "/dev/sdb",
+		DeviceModel:   "Test USB",
+		DeviceSerial:  "ABC123",
+		SizeBytes:     8_000_000_000,
+		Status:        "completed",
+		Verification:  "passed",
 		BytesVerified: 1_073_741_824,
-		StartedAt:    now.Add(-1 * time.Hour),
-		FinishedAt:   now,
-		Duration:     "1h0m0s",
+		StartedAt:     now.Add(-1 * time.Hour),
+		FinishedAt:    now,
+		Duration:      "1h0m0s",
 	}
 
 	r2 := WipeRecord{
-		DevicePath:  "/dev/sdc",
-		Status:      "failed",
-		Error:       "device busy",
-		StartedAt:   now.Add(-30 * time.Minute),
-		FinishedAt:  now.Add(-25 * time.Minute),
+		DevicePath: "/dev/sdc",
+		Status:     "failed",
+		Error:      "device busy",
+		StartedAt:  now.Add(-30 * time.Minute),
+		FinishedAt: now.Add(-25 * time.Minute),
 	}
 
 	if err := store.Append(r1); err != nil {
@@ -130,6 +130,31 @@ func TestGetLatest(t *testing.T) {
 	// Unknown device
 	if store.GetLatest("/dev/sdz") != nil {
 		t.Error("expected nil for unknown device")
+	}
+}
+
+func TestGetByDeviceID(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	store.Append(WipeRecord{DevicePath: "/dev/sdb", DeviceID: "dev_a", Status: "completed"})
+	store.Append(WipeRecord{DevicePath: "/dev/sdb", DeviceID: "dev_b", Status: "failed"})
+	store.Append(WipeRecord{DevicePath: "/dev/sdc", DeviceID: "dev_a", Status: "cancelled"})
+
+	records := store.GetByDeviceID("dev_a")
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records for dev_a, got %d", len(records))
+	}
+	if records[0].Status != "cancelled" || records[1].Status != "completed" {
+		t.Fatalf("records not returned newest first for dev_a: %#v", records)
+	}
+
+	latest := store.GetLatestByDeviceID("dev_b")
+	if latest == nil || latest.Status != "failed" {
+		t.Fatalf("expected latest failed record for dev_b, got %#v", latest)
 	}
 }
 

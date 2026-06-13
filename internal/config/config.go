@@ -17,11 +17,12 @@ type Config struct {
 	MaxParallelJobs   int    `json:"maxParallelJobs"`
 	DefaultSchemeID   string `json:"defaultSchemeId"`
 	DefaultPresetID   string `json:"defaultPresetId"`
-	Theme             string `json:"theme"`          // "dark" | "light"
+	AutoWipeEnabled   bool   `json:"autoWipeEnabled"`
+	Theme             string `json:"theme"`           // "dark" | "light"
 	NotificationsOn   bool   `json:"notificationsOn"` // enable email/webhook notifications
 	WebhookURL        string `json:"webhookUrl,omitempty"`
 	AuthEnabled       bool   `json:"authEnabled"`
-	AuthToken         string `json:"authToken,omitempty"` // stored hashed in prod
+	AuthToken         string `json:"authToken,omitempty"`  // stored hashed in prod
 	HistoryRetention  int    `json:"historyRetentionDays"` // days to keep history, 0 = forever
 }
 
@@ -42,6 +43,7 @@ func New(unsafeAllowAllUSB bool, dataDir string) *Manager {
 		MaxParallelJobs:   2,
 		DefaultSchemeID:   "zero",
 		DefaultPresetID:   "",
+		AutoWipeEnabled:   false,
 		Theme:             "dark",
 		NotificationsOn:   false,
 		WebhookURL:        "",
@@ -106,6 +108,9 @@ func (m *Manager) Update(updates ConfigUpdate) {
 	if updates.DefaultPresetID != nil {
 		m.cfg.DefaultPresetID = *updates.DefaultPresetID
 	}
+	if updates.AutoWipeEnabled != nil {
+		m.cfg.AutoWipeEnabled = *updates.AutoWipeEnabled
+	}
 	if updates.Theme != nil {
 		m.cfg.Theme = *updates.Theme
 	}
@@ -135,6 +140,7 @@ type ConfigUpdate struct {
 	MaxParallelJobs  *int    `json:"maxParallelJobs,omitempty"`
 	DefaultSchemeID  *string `json:"defaultSchemeId,omitempty"`
 	DefaultPresetID  *string `json:"defaultPresetId,omitempty"`
+	AutoWipeEnabled  *bool   `json:"autoWipeEnabled,omitempty"`
 	Theme            *string `json:"theme,omitempty"`
 	NotificationsOn  *bool   `json:"notificationsOn,omitempty"`
 	WebhookURL       *string `json:"webhookUrl,omitempty"`

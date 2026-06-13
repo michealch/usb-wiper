@@ -1,5 +1,9 @@
 // History view
 
+import { apiGet } from '../api.js';
+import { renderVerifyTool } from '../components/cert.js';
+import { escapeHtml, formatBytes } from '../util.js';
+
 let historyData = [];
 
 async function loadAndRenderHistory() {
@@ -14,41 +18,83 @@ async function loadAndRenderHistory() {
 
 function renderHistory() {
   const el = document.getElementById('view-history');
-  
+  const completed = historyData.filter(r => r.status === 'completed').length;
+  const failed = historyData.filter(r => r.status === 'failed').length;
+
+  const verifyPanel = `
+    <section class="panel">
+      <div class="panel-header">
+        <div class="panel-title">Verify certificate</div>
+      </div>
+      <div id="history-verify-tool"></div>
+    </section>
+  `;
+
   if (historyData.length === 0) {
-    el.innerHTML = '<div class="card"><div class="empty-state"><span class="icon">📜</span>No wipe history yet.</div></div>';
+    el.innerHTML = `
+      <div class="view-shell">
+        <div class="page-head">
+          <div>
+            <div class="page-title">History</div>
+            <div class="page-subtitle">Completed wipe records and certificates</div>
+          </div>
+        </div>
+        <div class="split-grid">
+          <section class="panel"><div class="empty-state"><div class="empty-state-title">No wipe history yet.</div></div></section>
+          ${verifyPanel}
+        </div>
+      </div>`;
+    renderVerifyTool(el.querySelector('#history-verify-tool'));
     return;
   }
 
   el.innerHTML = `
-    <div class="card">
-      <div class="card-header"><h2>Wipe History (${historyData.length})</h2></div>
-      <table>
-        <thead><tr><th>Device</th><th>Status</th><th>Verification</th><th>Size</th><th>Duration</th><th>Date</th></tr></thead>
-        <tbody>${historyData.map(r => `
-          <tr class="clickable">
-            <td style="font-family:var(--font-mono)">${r.devicePath}</td>
-            <td><span class="badge ${r.status === 'completed' ? 'badge-success' : r.status === 'failed' ? 'badge-danger' : 'badge-neutral'}">${r.status}</span></td>
-            <td>${r.verification || '—'}</td>
-            <td>${formatBytes(r.sizeBytes)}</td>
-            <td>${r.duration || '—'}</td>
-            <td style="font-size:.78rem">${r.finishedAt ? new Date(r.finishedAt).toLocaleString() : '—'}</td>
-          </tr>`).join('')}</tbody>
-      </table>
+    <div class="view-shell">
+      <div class="page-head">
+        <div>
+          <div class="page-title">History</div>
+          <div class="page-subtitle">${historyData.length} record${historyData.length === 1 ? '' : 's'} saved</div>
+        </div>
+      </div>
+
+      <div class="metric-strip">
+        <div class="metric-pill"><span class="metric-label">Records</span><span class="metric-value">${historyData.length}</span></div>
+        <div class="metric-pill"><span class="metric-label">Completed</span><span class="metric-value">${completed}</span></div>
+        <div class="metric-pill"><span class="metric-label">Failed</span><span class="metric-value">${failed}</span></div>
+      </div>
+
+      <div class="split-grid">
+        <section class="panel">
+          <div class="panel-header">
+            <div class="panel-title">Wipe Records</div>
+            <div class="panel-note">Newest first</div>
+          </div>
+          <div class="table-scroll table-stack">
+            <table class="record-table">
+              <thead><tr><th scope="col">Device</th><th scope="col">Result</th><th scope="col">Size</th><th scope="col">Duration</th><th scope="col">Date</th></tr></thead>
+              <tbody>${historyData.map(r => `
+                <tr class="clickable">
+                  <td data-label="Device">
+                    <div class="record-primary">${escapeHtml(r.deviceModel || r.devicePath || '-')}</div>
+                    <div class="record-secondary">${escapeHtml(r.deviceSerial || r.deviceId || r.devicePath || '-')}</div>
+                  </td>
+                  <td data-label="Result">
+                    <span class="badge ${r.status === 'completed' ? 'badge-success' : r.status === 'failed' ? 'badge-danger' : 'badge-neutral'}">${escapeHtml(r.status)}</span>
+                    <div class="panel-note mt-1">${escapeHtml(r.verification || 'not verified')}</div>
+                  </td>
+                  <td data-label="Size">${formatBytes(r.sizeBytes)}</td>
+                  <td data-label="Duration">${escapeHtml(r.duration || '-')}</td>
+                  <td data-label="Date" style="font-size:var(--text-xs);color:var(--color-text-dim)">${r.finishedAt ? new Date(r.finishedAt).toLocaleString() : '-'}</td>
+                </tr>`).join('')}</tbody>
+            </table>
+          </div>
+        </section>
+        ${verifyPanel}
+      </div>
     </div>
   `;
+
+  renderVerifyTool(el.querySelector('#history-verify-tool'));
 }
-
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0, size = bytes;
-  while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
-  return size.toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
-}
-
-function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-
-import { apiGet } from '../api.js';
 
 export { loadAndRenderHistory, renderHistory };

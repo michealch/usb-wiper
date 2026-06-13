@@ -1,6 +1,8 @@
 package device
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,21 +13,27 @@ import (
 
 // Device represents a USB block device detected on the system.
 type Device struct {
-	Path         string              `json:"path"`
-	Name         string              `json:"name"`
-	Model        string              `json:"model"`
-	Serial       string              `json:"serial"`
-	SizeBytes    uint64              `json:"sizeBytes"`
-	Removable    bool                `json:"removable"`
-	IsUSB        bool                `json:"isUSB"`
-	WipeBlocked  bool                `json:"wipeBlocked"`
-	BlockReason  string              `json:"blockReason"`
-	Wiping       bool                `json:"wiping"`
-	WipeStatus   string              `json:"wipeStatus"`
-	WipePercent  float64             `json:"wipePercent"`
-	Mounted      bool                `json:"mounted"`
-	MountPoints  []string            `json:"mountPoints"`
-	WipeHistory  *WipeHistorySummary `json:"wipeHistory,omitempty"`
+	Path               string              `json:"path"`
+	Name               string              `json:"name"`
+	DeviceID           string              `json:"deviceId"`
+	IdentitySource     string              `json:"identitySource"`
+	IdentityConfidence string              `json:"identityConfidence"`
+	Model              string              `json:"model"`
+	Serial             string              `json:"serial"`
+	Firmware           string              `json:"firmware,omitempty"`
+	WWN                string              `json:"wwn,omitempty"`
+	SizeBytes          uint64              `json:"sizeBytes"`
+	Removable          bool                `json:"removable"`
+	IsUSB              bool                `json:"isUSB"`
+	WipeBlocked        bool                `json:"wipeBlocked"`
+	BlockReason        string              `json:"blockReason"`
+	Wiping             bool                `json:"wiping"`
+	WipeStatus         string              `json:"wipeStatus"`
+	WipePercent        float64             `json:"wipePercent"`
+	Mounted            bool                `json:"mounted"`
+	MountPoints        []string            `json:"mountPoints"`
+	WipeHistory        *WipeHistorySummary `json:"wipeHistory,omitempty"`
+	HealthLatest       *HealthSummary      `json:"healthLatest,omitempty"`
 }
 
 // WipeHistorySummary carries the most recent wipe outcome for this device.
@@ -33,6 +41,16 @@ type WipeHistorySummary struct {
 	Status       string    `json:"status"`       // "completed", "failed", "cancelled"
 	Verification string    `json:"verification"` // "passed", "failed", or empty
 	FinishedAt   time.Time `json:"finishedAt"`
+}
+
+// HealthSummary carries the most recent persisted SMART/health snapshot.
+type HealthSummary struct {
+	HealthStatus        string    `json:"healthStatus"`
+	TemperatureC        int       `json:"temperatureC,omitempty"`
+	PowerOnHours        uint64    `json:"powerOnHours,omitempty"`
+	EnduranceUsedPct    int       `json:"enduranceUsedPct,omitempty"`
+	UncorrectableErrors uint64    `json:"uncorrectableErrors,omitempty"`
+	CapturedAt          time.Time `json:"capturedAt"`
 }
 
 // ListUSBDevices enumerates all USB block devices on the system.
@@ -104,56 +122,88 @@ func probeDevice(name string) (*Device, error) {
 	// Check if USB
 	isUSB := isUSBDevice(base)
 
-	// Read model and serial: prefer smartctl, fall back to sysfs
-	model, serial := readDeviceIdentity(name)
-
 	// Read size (in 512-byte sectors)
 	size := readSysfsUint64(base, "size")
+	sizeBytes := size * 512
+
+	// Read identity: prefer the disk behind the USB bridge, not the bridge.
+	identity := readDeviceIdentity(name, sizeBytes)
 
 	// Check mounts
 	mountPoints := findMountPoints(name)
 
 	dev := &Device{
-		Path:        "/dev/" + name,
-		Name:        name,
-		Model:       model,
-		Serial:      serial,
-		SizeBytes:   size * 512,
-		Removable:   removable,
-		IsUSB:       isUSB,
-		Mounted:     len(mountPoints) > 0,
-		MountPoints: mountPoints,
+		Path:               "/dev/" + name,
+		Name:               name,
+		DeviceID:           identity.DeviceID,
+		IdentitySource:     identity.Source,
+		IdentityConfidence: identity.Confidence,
+		Model:              identity.Model,
+		Serial:             identity.Serial,
+		Firmware:           identity.Firmware,
+		WWN:                identity.WWN,
+		SizeBytes:          sizeBytes,
+		Removable:          removable,
+		IsUSB:              isUSB,
+		Mounted:            len(mountPoints) > 0,
+		MountPoints:        mountPoints,
 	}
 
 	return dev, nil
 }
 
-// readDeviceIdentity obtains model and serial for a device, using smartctl
-// as the primary source and falling back to sysfs when smartctl is unavailable
-// or returns empty values.
-func readDeviceIdentity(devName string) (model, serial string) {
+type Identity struct {
+	DeviceID   string
+	Source     string
+	Confidence string
+	Model      string
+	Serial     string
+	Firmware   string
+	WWN        string
+	SizeBytes  uint64
+}
+
+// readDeviceIdentity obtains identity for the physical disk behind a USB
+// bridge. Low-confidence fallback IDs intentionally include kernel diskseq so
+// swapped drives do not inherit history from a reused bridge or /dev path.
+func readDeviceIdentity(devName string, sizeBytes uint64) Identity {
 	devicePath := "/dev/" + devName
-	smartModel, smartSerial := GetSmartIdentity(devicePath)
+	smart := GetSmartIdentity(devicePath)
 
 	// Sysfs fallback values
 	base := filepath.Join("/sys/block", devName)
 	sysfsModel := readSysfsString(filepath.Join(base, "device"), "model")
 	sysfsSerial := readSysfsString(filepath.Join(base, "device"), "serial")
+	diskSeq := readSysfsString(base, "diskseq")
 
-	// Prefer smartctl values when available, fall back to sysfs
-	if smartModel != "" {
-		model = smartModel
-	} else {
-		model = sysfsModel
+	identity := Identity{
+		Model:     firstNonEmpty(smart.Model, sysfsModel),
+		Serial:    firstNonEmpty(smart.Serial, sysfsSerial),
+		Firmware:  smart.Firmware,
+		WWN:       smart.WWN,
+		SizeBytes: firstNonZero(smart.CapacityBytes, sizeBytes),
 	}
 
-	if smartSerial != "" {
-		serial = smartSerial
-	} else {
-		serial = sysfsSerial
+	switch {
+	case identity.WWN != "":
+		identity.Source = "smart-wwn"
+		identity.Confidence = "high"
+		identity.DeviceID = stableDeviceID("wwn", identity.WWN)
+	case smart.Serial != "" && identity.Model != "":
+		identity.Source = "smart-model-serial-capacity"
+		identity.Confidence = "high"
+		identity.DeviceID = stableDeviceID("smart", identity.Model, smart.Serial, strconv.FormatUint(identity.SizeBytes, 10))
+	case identity.Serial != "" && identity.Model != "":
+		identity.Source = "sysfs-model-serial-capacity"
+		identity.Confidence = "medium"
+		identity.DeviceID = stableDeviceID("sysfs", identity.Model, identity.Serial, strconv.FormatUint(identity.SizeBytes, 10))
+	default:
+		identity.Source = "attachment-diskseq"
+		identity.Confidence = "low"
+		identity.DeviceID = stableDeviceID("unknown", devicePath, diskSeq, resolvedSysfsDevicePath(base), identity.Model, strconv.FormatUint(identity.SizeBytes, 10))
 	}
 
-	return
+	return identity
 }
 
 func isUSBDevice(sysBlockPath string) bool {
@@ -218,4 +268,39 @@ func readSysfsUint64(base, file string) uint64 {
 		return 0
 	}
 	return v
+}
+
+func stableDeviceID(parts ...string) string {
+	normalized := make([]string, 0, len(parts))
+	for _, part := range parts {
+		normalized = append(normalized, strings.ToLower(strings.TrimSpace(part)))
+	}
+	sum := sha256.Sum256([]byte(strings.Join(normalized, "\x00")))
+	return "dev_" + hex.EncodeToString(sum[:])[:32]
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func firstNonZero(values ...uint64) uint64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func resolvedSysfsDevicePath(sysBlockPath string) string {
+	resolved, err := filepath.EvalSymlinks(filepath.Join(sysBlockPath, "device"))
+	if err != nil {
+		return ""
+	}
+	return resolved
 }

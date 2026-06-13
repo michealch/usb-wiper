@@ -12,13 +12,14 @@ Securely wipe USB storage devices from your browser.
 - **Wipe Presets** — Named, reusable wipe configurations (scheme, auto-format, verify size, label template). Built-in presets: Quick Zero, Standard Sanitize, DoD 3-Pass, Paranoid.
 - **Certificates of Erasure** — Tamper-evident PDF and JSON certificates signed with Ed25519. Verify certificates offline.
 - **Audit Log** — Append-only JSON audit trail of all user actions and security events.
-- **Device Fingerprinting** — SHA-256 hash of pre/post wipe device state for cryptographic evidence.
-- **Wipe History** — Persistent JSON-backed log with verification results.
-- **SMART Health** — NVMe and ATA health info via smartctl with multi-bridge auto-detection.
-- **Real-time UI** — Redesigned sidebar layout with dashboard, devices view with drawer, queue panel, history viewer, presets editor, and settings page. Dark/light themes.
+- **Physical Device Identity** — Tracks the disk behind USB bridges using SMART WWN/model/serial/capacity instead of the USB adapter ID.
+- **Wipe History** — Persistent JSON-backed log with verification results and trusted physical device identity.
+- **SMART Health History** — NVMe and ATA health info via smartctl with multi-bridge auto-detection, plus local history by physical device.
+- **Auto Wipe** — Optional, disabled-by-default mode that queues the default wipe scheme when a newly attached trusted disk serial appears. Already-connected drives are marked seen when enabling.
+- **Batch Wipe Configurator** — Multi-select one or many devices and drive them through a single focused configurator (targets, scheme/preset, options) gated by a deliberate hold-to-confirm, with a reduced-motion / keyboard fallback.
+- **Real-time UI** — Modern, grouped sidebar layout with a live wipe dashboard (animated progress gauge), devices view with inspection drawer, queue panel, history viewer, activity log, Auto Wipe, presets editor, and settings page. Dark/light themes with depth and tasteful motion (all gated behind `prefers-reduced-motion`).
 - **Server-Sent Events** — Push-driven progress updates, device plug/unplug detection.
 - **Auto-Format** — Optional FAT32 formatting after wipe.
-- **Scheduled Wipes** — Planned: cron-based and device-insert triggers (endpoint temporarily disabled; real cron parser in progress).
 - **Webhook Notifications** — POST webhook on job completion.
 - **Prometheus Metrics** — `/metrics` endpoint with counters and gauges.
 - **Docker** — Single container, Debian stable-slim base.
@@ -84,7 +85,7 @@ sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 |-------------------------------|------------------|-------------|
 | `PORT`                        | `8181`           | HTTP port |
 | `LOG_LEVEL`                   | `info`           | Log level: `debug`, `info`, `warn`, `error` |
-| `DATA_DIR`                    | `/data`          | Data directory for history, presets, settings, certificates, audit log |
+| `DATA_DIR`                    | `/data`          | Data directory for history, SMART health history, auto-wipe state, presets, settings, certificates, audit log |
 | `METRICS_BIND`                | `127.0.0.1:9090` | Prometheus metrics listen address (set to `off` to disable) |
 | `UNSAFE_ALLOW_ALL_USB`        | (unset)          | Skip removable-device check for USB SSDs/enclosures |
 | `ALLOW_HARDWARE_SECURE_ERASE` | (unset)          | Enable ATA Secure Erase / NVMe Format scheme |
@@ -98,6 +99,7 @@ sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 |--------|-----------------------|-------------|
 | GET    | `/api/devices`        | List USB devices with status |
 | GET    | `/api/health?device=X`| SMART health info |
+| GET    | `/api/health-history?deviceId=X` | SMART health snapshots for a trusted physical device ID |
 
 ### Wipe Operations
 
@@ -134,6 +136,14 @@ sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 | GET    | `/api/config`         | Get config (backward compat) |
 | POST   | `/api/config`         | Update config (backward compat) |
 
+### Auto Wipe
+
+| Method | Path                  | Description |
+|--------|-----------------------|-------------|
+| GET    | `/api/autowipe`       | Get Auto Wipe status, default action, and seen-device ledger |
+| PUT    | `/api/autowipe`       | Enable or disable Auto Wipe (`{"enabled": true}`) |
+| DELETE | `/api/autowipe/seen`  | Clear the seen-device ledger |
+
 ### Certificates
 
 | Method | Path                  | Description |
@@ -156,7 +166,9 @@ sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 
 | Method | Path                   | Description |
 |--------|------------------------|-------------|
-| GET    | `/api/history?device=X`| Wipe history |
+| GET    | `/api/history`         | All wipe history |
+| GET    | `/api/history?device=X`| Wipe history by current device path |
+| GET    | `/api/history?deviceId=X` | Wipe history by trusted physical device ID |
 
 ### POST /api/wipe
 
@@ -195,6 +207,28 @@ All 9 checks run before every destructive operation:
 8. Must not be mounted at system paths (`/`, `/boot`, `/home`, `/var`, `/usr`, `/etc`)
 9. Size must be ≤ 2 TB
 
+## Device Identity and Auto Wipe
+
+USB-to-SATA/NVMe adapters can expose the same USB bridge identity after a disk
+swap. USB Wiper therefore stores history against a physical disk identity when
+possible:
+
+1. SMART WWN (`high` confidence)
+2. SMART model + serial + capacity (`high` confidence)
+3. sysfs model + serial + capacity (`medium` confidence)
+4. attachment/diskseq fallback (`low` confidence)
+
+Only high/medium confidence identities are used for cross-attachment history.
+Low-confidence fallback IDs are treated as attachment-scoped and are not used
+for Auto Wipe eligibility.
+
+Auto Wipe is disabled by default. When enabled from the Auto Wipe page or API,
+currently attached trusted-serial devices are marked as seen first, so enabling
+the feature does not wipe drives that are already connected. Later, when a new
+trusted serial appears, the server queues a wipe with the current default scheme,
+`autoFormat`, and `verifySizeGB` settings. The normal safety checks still run
+before queueing and again in the queue worker.
+
 ## Development
 
 ```bash
@@ -229,10 +263,10 @@ internal/
   format/              → FAT32 formatting
   metrics/             → Prometheus metrics registry
   notify/              → Webhook notifications
-  persistence/         → JSON wipe history store (atomic writes)
+  persistence/         → JSON wipe history, SMART history, auto-wipe state
   presets/             → Named reusable wipe presets
   queue/               → FIFO job queue with concurrency control
-  scheduler/           → Cron/device-insert wipe scheduler
+  scheduler/           → Legacy scheduler package; not exposed in live UI/API
   server/              → HTTP server, SSE hub, all handlers
   server/static/       → Embedded web UI (ES modules, dark/light themes)
   ulid/                → ULID generator (stdlib-only)

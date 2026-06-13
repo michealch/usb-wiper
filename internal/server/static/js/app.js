@@ -1,5 +1,5 @@
 // USB Wiper — main application bootstrap and hash router
-import { apiGet, apiPost, connectSSE, logEvent } from './api.js';
+import { apiGet, connectSSE, logEvent, renderLogDetail } from './api.js';
 import { loadDevices, loadJobs, loadHistory as loadHistoryState, loadPresets, loadSchemes, loadSettings, state } from './state.js';
 import { initDrawer, openDrawer, deviceHealthCache, deviceHistoryCache } from './components/drawer.js';
 import { showToast } from './components/toast.js';
@@ -7,6 +7,8 @@ import { renderDashboard, updateDashboard } from './views/dashboard.js';
 import { renderDevices, updateDevices } from './views/devices.js';
 import { renderQueue, updateQueue } from './views/queue.js';
 import { loadAndRenderHistory } from './views/history.js';
+import { loadAndRenderActivity } from './views/activity.js';
+import { loadAndRenderAutoWipe } from './views/autowipe.js';
 import { loadAndRenderPresets } from './views/presets.js';
 import { loadAndRenderSettings } from './views/settings.js';
 
@@ -40,10 +42,17 @@ function patchProgressDOM(ev) {
   const containers = document.querySelectorAll(`[data-device="${esc}"]`);
   containers.forEach(container => {
     const progressEl = container.querySelector('progress');
-    if (progressEl) progressEl.value = ev.percent;
+    if (progressEl) {
+      progressEl.value = ev.percent;
+      progressEl.setAttribute('aria-valuenow', String(Math.round(ev.percent)));
+    }
 
     const pctSpan = container.querySelector('.progress-pct');
     if (pctSpan) pctSpan.textContent = ev.percent.toFixed(1) + '%';
+
+    // Drive the dashboard hero radial gauge, if present.
+    const gauge = container.querySelector('[data-gauge]');
+    if (gauge) gauge.style.setProperty('--pct', ev.percent.toFixed(1));
 
     const passSpan = container.querySelector('.progress-pass');
     if (passSpan && ev.currentPass && ev.totalPasses > 1) {
@@ -56,10 +65,8 @@ function patchProgressDOM(ev) {
   containers.forEach(container => {
     const segments = container.querySelectorAll('.progress-segment');
     if (segments.length > 0 && ev.currentPass && ev.totalPasses > 1) {
-      let pctSoFar = 0;
       for (let i = 0; i < ev.currentPass - 1; i++) {
         if (segments[i]) segments[i].className = 'progress-segment completed';
-        pctSoFar++;
       }
       // Active segment: fill based on percent within current pass.
       const perPass = 100 / ev.totalPasses;
@@ -84,12 +91,28 @@ function patchProgressDOM(ev) {
   });
 }
 
+function setSSEBanner(state) {
+  const banner = document.getElementById('sse-banner');
+  if (!banner) return;
+  if (state === 'reconnecting') {
+    banner.textContent = 'Reconnecting…';
+    banner.className = 'sse-banner visible';
+  } else if (state === 'lost') {
+    banner.textContent = 'Connection lost — refresh the page to resume live updates.';
+    banner.className = 'sse-banner lost visible';
+  } else {
+    banner.className = 'sse-banner';
+  }
+}
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initDrawer();
   initNavigation();
   initSSE();
+  initStatusBar();
+  loadSettings().catch(() => {});
   navigateTo(window.location.hash.replace('#/', '') || 'dashboard');
   initTopbarButtons();
 });
@@ -99,6 +122,13 @@ function initTheme() {
   const validThemes = ['light', 'dark'];
   if (saved && validThemes.includes(saved)) {
     document.documentElement.setAttribute('data-theme', saved);
+    return;
+  }
+  // Auto-detect OS preference if no saved theme
+  if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+    document.documentElement.setAttribute('data-theme', 'light');
   }
 }
 
@@ -131,7 +161,7 @@ function navigateTo(route) {
   if (viewEl) viewEl.classList.add('active');
 
   // Update topbar title
-  const title = { dashboard: 'Dashboard', devices: 'Devices', queue: 'Queue', history: 'History', presets: 'Presets', settings: 'Settings' };
+  const title = { dashboard: 'Dashboard', devices: 'Devices', queue: 'Queue', history: 'History', activity: 'Activity', autowipe: 'Auto Wipe', presets: 'Presets', settings: 'Settings' };
   document.getElementById('topbar-title').textContent = title[route] || route;
 
   // Load data for view — reuse refreshCurrentView for consistency.
@@ -143,6 +173,12 @@ function navigateTo(route) {
       break;
     case 'history':
       loadAndRenderHistory();
+      break;
+    case 'activity':
+      loadAndRenderActivity();
+      break;
+    case 'autowipe':
+      loadAndRenderAutoWipe();
       break;
     case 'presets':
       loadAndRenderPresets();
@@ -180,7 +216,8 @@ function initSSE() {
       if (ev.status === 'completed' || ev.status === 'failed' || ev.status === 'cancelled') {
         refreshCurrentView();
       }
-    }
+    },
+    onConnectionChange: (state) => setSSEBanner(state)
   });
 }
 
@@ -236,15 +273,35 @@ function initTopbarButtons() {
   });
 
   document.getElementById('btn-refresh-all').addEventListener('click', () => {
+    const svg = document.querySelector('#btn-refresh-all svg');
+    if (svg) {
+      svg.classList.add('spin');
+      setTimeout(() => svg.classList.remove('spin'), 500);
+    }
     refreshCurrentView();
     showToast('Refreshed', 'info', 1500);
   });
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 'r' && !e.ctrlKey && !e.metaKey) {
+      refreshCurrentView();
+      showToast('Refreshed', 'info', 1000);
+    }
+  });
 }
 
-// Export for inline form handlers
-window.startDeviceWipe = async function(device, scheme, autoFormat, verifyGB, label) {
-  try {
-    await apiPost('/api/wipe', { devices: [device], schemeId: scheme, autoFormat, verifySizeGB: parseInt(verifyGB), label });
-    showToast('Wipe started on ' + device, 'success');
-  } catch (e) { showToast(e.message, 'error'); }
-};
+function initStatusBar() {
+  const toggleBtn = document.getElementById('btn-statusbar-toggle');
+  const detail = document.getElementById('statusbar-detail');
+  if (toggleBtn && detail) {
+    toggleBtn.onclick = () => {
+      const shell = document.querySelector('.app-shell');
+      const isOpen = detail.classList.toggle('open');
+      shell.classList.toggle('detail-open', isOpen);
+      toggleBtn.setAttribute('aria-expanded', String(isOpen));
+      if (isOpen) renderLogDetail(detail);
+    };
+  }
+}
