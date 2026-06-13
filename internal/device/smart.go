@@ -33,6 +33,16 @@ type Health struct {
 	Raw                 map[string]interface{} `json:"raw"`
 }
 
+// SmartIdentity is the subset of smartctl identity data used to identify the
+// physical disk behind a USB bridge.
+type SmartIdentity struct {
+	Model         string
+	Serial        string
+	Firmware      string
+	WWN           string
+	CapacityBytes uint64
+}
+
 // smartDeviceTypes is the ordered list of -d flags to try with smartctl.
 // These cover common USB bridge chips for NVMe and SATA devices.
 var smartDeviceTypes = []string{
@@ -44,13 +54,12 @@ var smartDeviceTypes = []string{
 	"sntrealtek", // Realtek NVMe bridges
 }
 
-// GetSmartIdentity tries to read model name and serial number via smartctl.
-// Returns empty strings on failure (caller should fall back to sysfs).
+// GetSmartIdentity tries to read physical disk identity via smartctl.
+// Returns zero values on failure (caller should fall back to sysfs).
 // Uses a short timeout to avoid blocking device enumeration.
-func GetSmartIdentity(devicePath string) (model, serial string) {
+func GetSmartIdentity(devicePath string) SmartIdentity {
 	bestScore := -1
-	bestModel := ""
-	bestSerial := ""
+	best := SmartIdentity{}
 
 	for _, dt := range smartDeviceTypes {
 		output, _, err := runSmartctlJSON("-i", devicePath, dt, 3*time.Second)
@@ -63,43 +72,25 @@ func GetSmartIdentity(devicePath string) (model, serial string) {
 			continue
 		}
 
-		attemptModel := ""
-		attemptSerial := ""
+		attempt := parseSmartIdentity(raw)
 
-		if m, ok := raw["model_name"].(string); ok && m != "" {
-			attemptModel = m
-		}
-		// Also check "device" -> "model" for USB bridges
-		if attemptModel == "" {
-			if dev, ok := raw["device"].(map[string]interface{}); ok {
-				if m, ok := dev["model"].(string); ok {
-					attemptModel = m
-				}
-			}
-		}
-
-		if s, ok := raw["serial_number"].(string); ok && s != "" {
-			attemptSerial = s
-		}
-
-		score := smartIdentityScore(raw, attemptModel, attemptSerial)
+		score := smartIdentityScore(raw, attempt)
 		if score > bestScore {
 			bestScore = score
-			bestModel = attemptModel
-			bestSerial = attemptSerial
+			best = attempt
 		}
 
 		// Full disk identity is enough. Bridge-only device metadata is not:
 		// a later -d snt* probe may expose the actual NVMe behind the bridge.
 		if score >= 30 {
-			return attemptModel, attemptSerial
+			return attempt
 		}
 	}
 
 	if bestScore > 0 {
-		return bestModel, bestSerial
+		return best
 	}
-	return "", ""
+	return SmartIdentity{}
 }
 
 // GetHealth retrieves SMART health information for a device.
@@ -205,6 +196,13 @@ func parseSmartJSON(output []byte) *Health {
 	}
 	if fw, ok := raw["firmware_version"].(string); ok {
 		h.FirmwareVersion = fw
+	}
+	if h.ModelName == "" {
+		if dev, ok := raw["device"].(map[string]interface{}); ok {
+			if m, ok := dev["model"].(string); ok {
+				h.ModelName = strings.TrimSpace(m)
+			}
+		}
 	}
 
 	// ---- Capacity ----
@@ -324,13 +322,68 @@ func parseNVMeHealthLog(h *Health, nvme map[string]interface{}) {
 	}
 }
 
-func smartIdentityScore(raw map[string]interface{}, model, serial string) int {
+func parseSmartIdentity(raw map[string]interface{}) SmartIdentity {
+	id := SmartIdentity{}
+	if m, ok := raw["model_name"].(string); ok {
+		id.Model = strings.TrimSpace(m)
+	}
+	if id.Model == "" {
+		if dev, ok := raw["device"].(map[string]interface{}); ok {
+			if m, ok := dev["model"].(string); ok {
+				id.Model = strings.TrimSpace(m)
+			}
+		}
+	}
+	if s, ok := raw["serial_number"].(string); ok {
+		id.Serial = strings.TrimSpace(s)
+	}
+	if fw, ok := raw["firmware_version"].(string); ok {
+		id.Firmware = strings.TrimSpace(fw)
+	}
+	if capBytes, ok := parseCapacityValue(raw["user_capacity"]); ok {
+		id.CapacityBytes = capBytes
+	}
+	id.WWN = extractWWN(raw)
+	return id
+}
+
+func extractWWN(raw map[string]interface{}) string {
+	if value, ok := raw["wwn"].(map[string]interface{}); ok {
+		parts := []string{}
+		for _, key := range []string{"naa", "oui", "id"} {
+			if s, ok := value[key].(string); ok && strings.TrimSpace(s) != "" {
+				parts = append(parts, strings.TrimSpace(s))
+				continue
+			}
+			if n := safeUint(value[key]); n > 0 {
+				parts = append(parts, strconv.FormatUint(n, 16))
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "-")
+		}
+	}
+	for _, key := range []string{"world_wide_name", "wwn"} {
+		if s, ok := raw[key].(string); ok && strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
+}
+
+func smartIdentityScore(raw map[string]interface{}, id SmartIdentity) int {
 	score := 0
-	if model != "" {
+	if id.Model != "" {
 		score += 10
 	}
-	if serial != "" {
+	if id.Serial != "" {
 		score += 10
+	}
+	if id.WWN != "" {
+		score += 30
+	}
+	if id.CapacityBytes > 0 {
+		score += 5
 	}
 	if hasAnyField(raw, "model_name", "serial_number", "firmware_version") {
 		score += 10

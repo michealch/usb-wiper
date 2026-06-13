@@ -18,7 +18,6 @@ import (
 	"github.com/usb-wiper/internal/persistence"
 	"github.com/usb-wiper/internal/presets"
 	"github.com/usb-wiper/internal/queue"
-	"github.com/usb-wiper/internal/scheduler"
 	"github.com/usb-wiper/internal/wipe"
 )
 
@@ -52,11 +51,23 @@ func (s *Server) handleGetDevices(w http.ResponseWriter, r *http.Request) {
 			devices[i].WipePercent = job.Progress
 		}
 
-		if latest := s.history.GetLatest(devices[i].Path); latest != nil {
+		if latest := s.latestTrustedWipeRecord(devices[i]); latest != nil {
 			devices[i].WipeHistory = &device.WipeHistorySummary{
 				Status:       latest.Status,
 				Verification: latest.Verification,
 				FinishedAt:   latest.FinishedAt,
+			}
+		}
+		if s.healthHistory != nil && isTrustedIdentity(devices[i].IdentityConfidence) {
+			if latest := s.healthHistory.GetLatestByDeviceID(devices[i].DeviceID); latest != nil {
+				devices[i].HealthLatest = &device.HealthSummary{
+					HealthStatus:        latest.HealthStatus,
+					TemperatureC:        latest.TemperatureC,
+					PowerOnHours:        latest.PowerOnHours,
+					EnduranceUsedPct:    latest.EnduranceUsedPct,
+					UncorrectableErrors: latest.UncorrectableErrors,
+					CapturedAt:          latest.CapturedAt,
+				}
 			}
 		}
 	}
@@ -77,9 +88,12 @@ func (s *Server) handleGetHealth(w http.ResponseWriter, r *http.Request) {
 	cfg := s.config.Get()
 	devices, _ := device.ListUSBDevices(cfg.UnsafeAllowAllUSB)
 	found := false
+	var liveDevice *device.Device
 	for _, d := range devices {
 		if d.Path == devicePath {
 			found = true
+			copy := d
+			liveDevice = &copy
 			break
 		}
 	}
@@ -93,13 +107,59 @@ func (s *Server) handleGetHealth(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if liveDevice != nil {
+		if health.ModelName == "" {
+			health.ModelName = liveDevice.Model
+		}
+		if health.SerialNumber == "" {
+			health.SerialNumber = liveDevice.Serial
+		}
+		if health.FirmwareVersion == "" {
+			health.FirmwareVersion = liveDevice.Firmware
+		}
+		if health.CapacityBytes == 0 {
+			health.CapacityBytes = liveDevice.SizeBytes
+		}
+		s.recordHealthSnapshot(*liveDevice, health)
+	}
 
 	writeJSON(w, http.StatusOK, health)
+}
+
+func (s *Server) handleGetHealthHistory(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.URL.Query().Get("deviceId")
+	if deviceID == "" {
+		writeError(w, http.StatusBadRequest, "deviceId query parameter required")
+		return
+	}
+	if s.healthHistory == nil {
+		writeError(w, http.StatusServiceUnavailable, "health history not available")
+		return
+	}
+	records := s.healthHistory.GetByDeviceID(deviceID)
+	if records == nil {
+		records = []persistence.HealthRecord{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"history": records,
+	})
 }
 
 // ---- History endpoints ----
 
 func (s *Server) handleGetHistory(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.URL.Query().Get("deviceId")
+	if deviceID != "" {
+		filtered := s.history.GetByDeviceID(deviceID)
+		if filtered == nil {
+			filtered = []persistence.WipeRecord{}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"history": filtered,
+		})
+		return
+	}
+
 	devicePath := r.URL.Query().Get("device")
 	if devicePath != "" {
 		all := s.history.GetAll()
@@ -198,13 +258,8 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_, err := s.jobs.Enqueue(queue.EnqueueRequest{
-			DevicePath:   dev,
-			SchemeID:     req.SchemeID,
-			AutoFormat:   req.AutoFormat,
-			VerifySizeGB: verifySizeGB,
-			Label:        req.Label,
-		})
+		liveDevice := s.findLiveDevice(dev)
+		_, err := s.jobs.Enqueue(enqueueRequestForDevice(dev, liveDevice, req.SchemeID, req.AutoFormat, verifySizeGB, req.Label))
 		if err != nil {
 			if errors.Is(err, queue.ErrJobAlreadyActive) {
 				conflicts = append(conflicts, dev)
@@ -300,13 +355,8 @@ func (s *Server) handlePostTestWipe(w http.ResponseWriter, r *http.Request) {
 		verifySizeGB = *req.VerifySizeGB
 	}
 
-	_, err := s.jobs.Enqueue(queue.EnqueueRequest{
-		DevicePath:   req.Device,
-		SchemeID:     "zero",
-		AutoFormat:   false,
-		VerifySizeGB: verifySizeGB,
-		Label:        "test-wipe",
-	})
+	liveDevice := s.findLiveDevice(req.Device)
+	_, err := s.jobs.Enqueue(enqueueRequestForDevice(req.Device, liveDevice, "zero", false, verifySizeGB, "test-wipe"))
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
@@ -458,6 +508,17 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if updates.AutoWipeEnabled != nil && *updates.AutoWipeEnabled && !s.config.Get().AutoWipeEnabled {
+		if s.autoWipe == nil {
+			writeError(w, http.StatusServiceUnavailable, "auto wipe state store not available")
+			return
+		}
+		if _, err := s.markCurrentDevicesSeen("observed_on_enable", "Auto wipe enabled; connected devices marked seen"); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
 	s.config.Update(updates)
 	writeJSON(w, http.StatusOK, s.config.Get())
 }
@@ -596,6 +657,222 @@ func resolveLabel(template string) string {
 	return result
 }
 
+func isTrustedIdentity(confidence string) bool {
+	return confidence == "high" || confidence == "medium"
+}
+
+func (s *Server) latestTrustedWipeRecord(d device.Device) *persistence.WipeRecord {
+	if !isTrustedIdentity(d.IdentityConfidence) {
+		return nil
+	}
+	return s.history.GetLatestByDeviceID(d.DeviceID)
+}
+
+func (s *Server) findLiveDevice(devicePath string) *device.Device {
+	cfg := s.config.Get()
+	devices, err := device.ListUSBDevices(cfg.UnsafeAllowAllUSB)
+	if err != nil {
+		return nil
+	}
+	for _, d := range devices {
+		if d.Path == devicePath {
+			copy := d
+			return &copy
+		}
+	}
+	return nil
+}
+
+func enqueueRequestForDevice(devicePath string, d *device.Device, schemeID string, autoFormat bool, verifySizeGB int, label string) queue.EnqueueRequest {
+	req := queue.EnqueueRequest{
+		DevicePath:   devicePath,
+		SchemeID:     schemeID,
+		AutoFormat:   autoFormat,
+		VerifySizeGB: verifySizeGB,
+		Label:        label,
+	}
+	if d != nil {
+		req.DeviceID = d.DeviceID
+		req.IdentitySource = d.IdentitySource
+		req.IdentityConfidence = d.IdentityConfidence
+		req.DeviceModel = d.Model
+		req.DeviceSerial = d.Serial
+		req.DeviceFirmware = d.Firmware
+		req.DeviceWWN = d.WWN
+		req.DeviceSizeBytes = d.SizeBytes
+	}
+	return req
+}
+
+func defaultSchemeID(cfg config.Config) string {
+	if strings.TrimSpace(cfg.DefaultSchemeID) == "" {
+		return "zero"
+	}
+	return cfg.DefaultSchemeID
+}
+
+func isAutoWipeCandidate(d device.Device) bool {
+	return d.DeviceID != "" && strings.TrimSpace(d.Serial) != "" && isTrustedIdentity(d.IdentityConfidence)
+}
+
+func (s *Server) markCurrentDevicesSeen(action, message string) (int, error) {
+	cfg := s.config.Get()
+	devices, err := device.ListUSBDevices(cfg.UnsafeAllowAllUSB)
+	if err != nil {
+		return 0, err
+	}
+	return s.markDevicesSeen(devices, action, message)
+}
+
+func (s *Server) markDevicesSeen(devices []device.Device, action, message string) (int, error) {
+	if s.autoWipe == nil {
+		return 0, nil
+	}
+	marked := 0
+	for _, d := range devices {
+		if !isAutoWipeCandidate(d) {
+			continue
+		}
+		if s.autoWipe.Has(d.DeviceID) {
+			continue
+		}
+		rec := autoWipeRecordForDevice(d, action, "", message)
+		if err := s.autoWipe.Upsert(rec); err != nil {
+			return marked, err
+		}
+		marked++
+	}
+	return marked, nil
+}
+
+func (s *Server) handleAutoWipeDevices(devices []device.Device, cfg config.Config) {
+	if s.autoWipe == nil || !cfg.AutoWipeEnabled {
+		return
+	}
+
+	schemeID := defaultSchemeID(cfg)
+	for _, d := range devices {
+		if !isAutoWipeCandidate(d) || s.autoWipe.Has(d.DeviceID) {
+			continue
+		}
+
+		if d.WipeBlocked {
+			s.recordAutoWipeDecision(d, "skipped", "", d.BlockReason)
+			continue
+		}
+
+		if err := device.IsSafeToWipe(d.Path, cfg.UnsafeAllowAllUSB); err != nil {
+			s.recordAutoWipeDecision(d, "skipped", "", err.Error())
+			continue
+		}
+
+		job, err := s.jobs.Enqueue(enqueueRequestForDevice(d.Path, &d, schemeID, cfg.AutoFormat, cfg.VerifySizeGB, "auto-wipe"))
+		if err != nil {
+			action := "error"
+			if errors.Is(err, queue.ErrJobAlreadyActive) {
+				action = "conflict"
+			}
+			s.recordAutoWipeDecision(d, action, "", err.Error())
+			continue
+		}
+
+		msg := fmt.Sprintf("Queued default scheme %s for new serial %s", schemeID, d.Serial)
+		s.recordAutoWipeDecision(d, "queued", job.ID, msg)
+		if s.auditLog != nil {
+			s.auditLog.Log(audit.Event{
+				Event:  "auto_wipe_queued",
+				Actor:  "system",
+				Target: d.Path,
+				Details: map[string]interface{}{
+					"job_id":              job.ID,
+					"scheme":              schemeID,
+					"device_id":           d.DeviceID,
+					"serial":              d.Serial,
+					"identity_source":     d.IdentitySource,
+					"identity_confidence": d.IdentityConfidence,
+				},
+			})
+		}
+		s.sendRefreshEvent()
+	}
+}
+
+func (s *Server) recordAutoWipeDecision(d device.Device, action, jobID, message string) {
+	if s.autoWipe == nil {
+		return
+	}
+	if err := s.autoWipe.Upsert(autoWipeRecordForDevice(d, action, jobID, message)); err != nil {
+		log.Printf("WARNING: failed to persist auto-wipe state for %s: %v", d.Path, err)
+	}
+}
+
+func autoWipeRecordForDevice(d device.Device, action, jobID, message string) persistence.AutoWipeRecord {
+	return persistence.AutoWipeRecord{
+		DeviceID:           d.DeviceID,
+		Serial:             d.Serial,
+		Model:              d.Model,
+		IdentitySource:     d.IdentitySource,
+		IdentityConfidence: d.IdentityConfidence,
+		LastSeenAt:         time.Now(),
+		LastDevicePath:     d.Path,
+		LastAction:         action,
+		LastJobID:          jobID,
+		LastMessage:        message,
+	}
+}
+
+func (s *Server) recordHealthSnapshot(d device.Device, h *device.Health) {
+	if s.healthHistory == nil || h == nil {
+		return
+	}
+	rec := persistence.HealthRecord{
+		DeviceID:            d.DeviceID,
+		DevicePath:          d.Path,
+		IdentitySource:      d.IdentitySource,
+		IdentityConfidence:  d.IdentityConfidence,
+		Model:               firstNonEmpty(h.ModelName, d.Model),
+		Serial:              firstNonEmpty(h.SerialNumber, d.Serial),
+		Firmware:            firstNonEmpty(h.FirmwareVersion, d.Firmware),
+		WWN:                 d.WWN,
+		SizeBytes:           firstNonZero(h.CapacityBytes, d.SizeBytes),
+		CapturedAt:          time.Now(),
+		HealthStatus:        h.HealthStatus,
+		DeviceType:          h.DeviceType,
+		PowerOnHours:        h.PowerOnHours,
+		PowerCycleCount:     h.PowerCycleCount,
+		TemperatureC:        h.TemperatureC,
+		ReadLBAs:            h.ReadLBAs,
+		WriteLBAs:           h.WriteLBAs,
+		AvailableSparePct:   h.AvailableSparePct,
+		EnduranceUsedPct:    h.EnduranceUsedPct,
+		ReallocatedSectors:  h.ReallocatedSectors,
+		PendingSectors:      h.PendingSectors,
+		UncorrectableErrors: h.UncorrectableErrors,
+		Raw:                 h.Raw,
+	}
+	if err := s.healthHistory.Append(rec); err != nil {
+		log.Printf("WARNING: failed to persist health snapshot for %s: %v", d.Path, err)
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func firstNonZero(values ...uint64) uint64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
 // ---- Certificate endpoints ----
 
 func (s *Server) handleGetPubKey(w http.ResponseWriter, r *http.Request) {
@@ -681,15 +958,16 @@ func (s *Server) handlePostCertVerify(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) buildCertificate(job *queue.Job) *cert2.Certificate {
-	// Resolve device info from history
-	devInfo, _ := device.GetDevice(job.DevicePath)
-	model := ""
-	serial := ""
-	var size uint64
-	if devInfo != nil {
-		model = devInfo.Model
-		serial = devInfo.Serial
-		size = devInfo.SizeBytes
+	model := job.DeviceModel
+	serial := job.DeviceSerial
+	size := job.DeviceSizeBytes
+	if model == "" || serial == "" || size == 0 {
+		devInfo, _ := device.GetDevice(job.DevicePath)
+		if devInfo != nil {
+			model = firstNonEmpty(model, devInfo.Model)
+			serial = firstNonEmpty(serial, devInfo.Serial)
+			size = firstNonZero(size, devInfo.SizeBytes)
+		}
 	}
 
 	scheme, _ := s.schemes.Get(job.SchemeID)
@@ -749,38 +1027,84 @@ func (s *Server) handleGetAudit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ---- Schedule endpoints ----
+// ---- Auto wipe endpoints ----
 
-func (s *Server) handleGetSchedules(w http.ResponseWriter, r *http.Request) {
-	if s.scheduler == nil {
-		writeError(w, http.StatusServiceUnavailable, "scheduler not available")
-		return
+func (s *Server) handleGetAutoWipe(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config.Get()
+	records := []persistence.AutoWipeRecord{}
+	if s.autoWipe != nil {
+		records = s.autoWipe.List()
 	}
-	schedules := s.scheduler.List()
-	if schedules == nil {
-		schedules = []scheduler.Schedule{}
+
+	schemeID := defaultSchemeID(cfg)
+	schemeName := schemeID
+	if scheme, err := s.schemes.Get(schemeID); err == nil {
+		schemeName = scheme.DisplayName()
 	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"schedules": schedules,
+		"available":         s.autoWipe != nil,
+		"enabled":           cfg.AutoWipeEnabled && s.autoWipe != nil,
+		"configuredEnabled": cfg.AutoWipeEnabled,
+		"defaultSchemeId":   schemeID,
+		"defaultSchemeName": schemeName,
+		"autoFormat":        cfg.AutoFormat,
+		"verifySizeGB":      cfg.VerifySizeGB,
+		"seen":              records,
 	})
 }
 
-func (s *Server) handlePostSchedules(w http.ResponseWriter, r *http.Request) {
-	// Scheduler disabled: the cron parser is a non-functional stub that
-	// fires every minute regardless of expression. A real 5-field cron
-	// parser is tracked as a follow-up.
-	writeError(w, http.StatusNotImplemented, "scheduler is disabled pending proper cron parser implementation")
+func (s *Server) handlePutAutoWipe(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Enabled == nil {
+		writeError(w, http.StatusBadRequest, "enabled field required")
+		return
+	}
+	if s.autoWipe == nil {
+		writeError(w, http.StatusServiceUnavailable, "auto wipe state store not available")
+		return
+	}
+
+	prev := s.config.Get().AutoWipeEnabled
+	marked := 0
+	if *req.Enabled && !prev {
+		var err error
+		marked, err = s.markCurrentDevicesSeen("observed_on_enable", "Auto wipe enabled; connected devices marked seen")
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
+	s.config.Update(config.ConfigUpdate{AutoWipeEnabled: req.Enabled})
+	s.auditEvent(r, "auto_wipe_configured", "", map[string]interface{}{
+		"enabled":          *req.Enabled,
+		"connected_marked": marked,
+	})
+
+	cfg := s.config.Get()
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"enabled":         cfg.AutoWipeEnabled,
+		"connectedMarked": marked,
+		"seen":            s.autoWipe.List(),
+	})
 }
 
-func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
-	if s.scheduler == nil {
-		writeError(w, http.StatusServiceUnavailable, "scheduler not available")
+func (s *Server) handleDeleteAutoWipeSeen(w http.ResponseWriter, r *http.Request) {
+	if s.autoWipe == nil {
+		writeError(w, http.StatusServiceUnavailable, "auto wipe state store not available")
 		return
 	}
-	id := r.PathValue("id")
-	if err := s.scheduler.DeleteSchedule(id); err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+	if err := s.autoWipe.Clear(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.auditEvent(r, "auto_wipe_seen_cleared", "", nil)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

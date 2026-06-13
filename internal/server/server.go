@@ -22,7 +22,6 @@ import (
 	"github.com/usb-wiper/internal/persistence"
 	"github.com/usb-wiper/internal/presets"
 	"github.com/usb-wiper/internal/queue"
-	"github.com/usb-wiper/internal/scheduler"
 	"github.com/usb-wiper/internal/wipe"
 )
 
@@ -31,18 +30,19 @@ var staticFiles embed.FS
 
 // Server is the main HTTP server for the USB Wiper application.
 type Server struct {
-	port      string
-	config    *config.Manager
-	sseHub    *SSEHub
-	jobs      *queue.Queue
-	history   *persistence.Store
-	presets   *presets.Store
-	schemes   *wipe.SchemeRegistry
-	signer    *cert2.Signer
-	auditLog  *audit.Logger
-	metrics   *metrics.Registry
-	scheduler *scheduler.Manager
-	server    *http.Server
+	port          string
+	config        *config.Manager
+	sseHub        *SSEHub
+	jobs          *queue.Queue
+	history       *persistence.Store
+	healthHistory *persistence.HealthStore
+	autoWipe      *persistence.AutoWipeStore
+	presets       *presets.Store
+	schemes       *wipe.SchemeRegistry
+	signer        *cert2.Signer
+	auditLog      *audit.Logger
+	metrics       *metrics.Registry
+	server        *http.Server
 }
 
 // New creates a new Server instance.
@@ -51,6 +51,18 @@ func New(port string, unsafeAllowAllUSB bool, dataDir string) *Server {
 	if err != nil {
 		log.Printf("WARNING: failed to initialize history store: %v (wipes will not be persisted)", err)
 		history, _ = persistence.New("")
+	}
+
+	healthHistory, err := persistence.NewHealthStore(dataDir)
+	if err != nil {
+		log.Printf("WARNING: failed to initialize health history store: %v (SMART snapshots will not be persisted)", err)
+		healthHistory = nil
+	}
+
+	autoWipeStore, err := persistence.NewAutoWipeStore(dataDir)
+	if err != nil {
+		log.Printf("WARNING: failed to initialize auto-wipe state store: %v (auto wipe will be disabled)", err)
+		autoWipeStore = nil
 	}
 
 	presetStore, err := presets.New(dataDir)
@@ -97,23 +109,19 @@ func New(port string, unsafeAllowAllUSB bool, dataDir string) *Server {
 	metricsReg.NewGauge("usb_wiper_jobs_running", "Number of currently running wipe jobs")
 	metricsReg.NewGauge("usb_wiper_jobs_queued", "Number of queued wipe jobs")
 
-	schedMgr, err := scheduler.New(dataDir, nil)
-	if err != nil {
-		log.Printf("WARNING: failed to initialize scheduler: %v", err)
-	}
-
 	return &Server{
-		port:      port,
-		config:    cfg,
-		sseHub:    sseHub,
-		jobs:      jobs,
-		history:   history,
-		presets:   presetStore,
-		schemes:   schemeReg,
-		signer:    signer,
-		auditLog:  auditLog,
-		metrics:   metricsReg,
-		scheduler: schedMgr,
+		port:          port,
+		config:        cfg,
+		sseHub:        sseHub,
+		jobs:          jobs,
+		history:       history,
+		healthHistory: healthHistory,
+		autoWipe:      autoWipeStore,
+		presets:       presetStore,
+		schemes:       schemeReg,
+		signer:        signer,
+		auditLog:      auditLog,
+		metrics:       metricsReg,
 	}
 }
 
@@ -136,6 +144,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Device
 	mux.HandleFunc("GET /api/devices", s.handleGetDevices)
 	mux.HandleFunc("GET /api/health", s.handleGetHealth)
+	mux.HandleFunc("GET /api/health-history", s.handleGetHealthHistory)
 
 	// History
 	mux.HandleFunc("GET /api/history", s.handleGetHistory)
@@ -174,10 +183,10 @@ func (s *Server) Start(ctx context.Context) error {
 	// Audit
 	mux.HandleFunc("GET /api/audit", s.handleGetAudit)
 
-	// Schedules
-	mux.HandleFunc("GET /api/schedules", s.handleGetSchedules)
-	mux.HandleFunc("POST /api/schedules", s.handlePostSchedules)
-	mux.HandleFunc("DELETE /api/schedules/{id}", s.handleDeleteSchedule)
+	// Auto wipe
+	mux.HandleFunc("GET /api/autowipe", s.handleGetAutoWipe)
+	mux.HandleFunc("PUT /api/autowipe", s.handlePutAutoWipe)
+	mux.HandleFunc("DELETE /api/autowipe/seen", s.handleDeleteAutoWipeSeen)
 
 	// SSE
 	mux.HandleFunc("GET /api/events", s.handleSSE)
@@ -229,11 +238,6 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Start job queue dispatcher
 	go s.jobs.Start(ctx)
-
-	// Start scheduler (disabled — cron parser is a stub)
-	// if s.scheduler != nil {
-	// 	go s.scheduler.Start(ctx)
-	// }
 
 	// Start server
 	errCh := make(chan error, 1)
@@ -334,6 +338,7 @@ func (s *Server) watchDevices(ctx context.Context) {
 	defer ticker.Stop()
 
 	var lastDevicePaths string
+	autoWipeInitialized := false
 
 	for {
 		select {
@@ -344,6 +349,19 @@ func (s *Server) watchDevices(ctx context.Context) {
 			devices, err := device.ListUSBDevices(cfg.UnsafeAllowAllUSB)
 			if err != nil {
 				continue
+			}
+
+			if cfg.AutoWipeEnabled && s.autoWipe != nil {
+				if !autoWipeInitialized {
+					if _, err := s.markDevicesSeen(devices, "observed_on_startup", "Auto wipe startup scan; connected devices marked seen"); err != nil {
+						log.Printf("WARNING: failed to mark auto-wipe startup devices: %v", err)
+					}
+					autoWipeInitialized = true
+				} else {
+					s.handleAutoWipeDevices(devices, cfg)
+				}
+			} else {
+				autoWipeInitialized = false
 			}
 
 			paths := make([]string, 0, len(devices))
