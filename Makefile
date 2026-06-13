@@ -58,7 +58,7 @@ dev:
 	docker compose -f deploy/docker-compose.dev.yml --env-file deploy/dev.env up --build
 
 dev-detached:
-	docker compose -f deploy/docker-compose.dev.yml --env-file dev.env up --build -d
+	docker compose -f deploy/docker-compose.dev.yml --env-file deploy/dev.env up --build -d
 
 prod:
 	docker compose -f deploy/docker-compose.prod.yml --env-file deploy/prod.env up --build -d
