@@ -1,4 +1,14 @@
 
+## [0.6.10] - 2026-06-29
+
+
+### Chore
+
+- Update debian:stable-slim docker digest to ee12ffb (#14)
+
+
+
+
 ## [0.6.9] - 2026-06-22
 
 
