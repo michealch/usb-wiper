@@ -1,4 +1,16 @@
 
+## [0.6.14] - 2026-07-08
+
+
+### Chore
+
+- Update docker/dockerfile docker tag to v1.25 (#17)
+- Update docker/build-push-action action to v7.3.0 (#16)
+- Update actions/checkout action to v7 (#21)
+
+
+
+
 ## [0.6.11] - 2026-07-01
 
 
