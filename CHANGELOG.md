@@ -1,4 +1,15 @@
 
+## [0.6.13] - 2026-07-08
+
+
+### Chore
+
+- Update docker/metadata-action action to v6.2.0 (#19)
+- Update docker/login-action action to v4.4.0 (#18)
+
+
+
+
 ## [0.6.11] - 2026-07-01
 
 
