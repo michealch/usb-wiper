@@ -1,4 +1,14 @@
 
+## [0.6.18] - 2026-07-21
+
+
+### Chore
+
+- Update softprops/action-gh-release action to v3.0.2 (#25)
+
+
+
+
 ## [0.6.17] - 2026-07-20
 
 
