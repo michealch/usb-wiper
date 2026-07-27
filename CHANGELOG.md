@@ -1,4 +1,14 @@
 
+## [0.6.19] - 2026-07-27
+
+
+### Chore
+
+- Update actions/checkout action to v7.0.1 (#26)
+
+
+
+
 ## [0.6.18] - 2026-07-21
 
 
