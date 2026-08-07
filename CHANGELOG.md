@@ -1,4 +1,14 @@
 
+## [0.6.20] - 2026-08-07
+
+
+### Chore
+
+- Update actions/setup-go action to v7 (#29)
+
+
+
+
 ## [0.6.19] - 2026-07-27
 
 
