@@ -1,4 +1,14 @@
 
+## [0.6.21] - 2026-08-07
+
+
+### Chore
+
+- Update docker/dockerfile docker tag to v1.26 (#28)
+
+
+
+
 ## [0.6.19] - 2026-07-27
 
 
