@@ -1,4 +1,14 @@
 
+## [0.6.22] - 2026-08-07
+
+
+### Chore
+
+- Update docker/login-action action to v4.6.0 (#27)
+
+
+
+
 ## [0.6.19] - 2026-07-27
 
 
