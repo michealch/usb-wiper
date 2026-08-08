@@ -1,4 +1,14 @@
 
+## [0.6.23] - 2026-08-08
+
+
+### Changed
+
+- Remove dead code and collapse duplicated persistence (#30)
+
+
+
+
 ## [0.6.22] - 2026-08-07
 
 
