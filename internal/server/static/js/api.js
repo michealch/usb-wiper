@@ -118,19 +118,8 @@ function connectSSE(handlers = {}) {
   return eventSource;
 }
 
-function closeSSE() {
-  if (eventSource) { eventSource.close(); eventSource = null; }
-}
-
-let logBuffer = [];
-const MAX_LOG = 200;
-let logCount = 0;
-
 function logEvent(msg, type = 'info') {
   const time = new Date().toLocaleTimeString();
-  logBuffer.unshift({ time, msg, type });
-  if (logBuffer.length > MAX_LOG) logBuffer.length = MAX_LOG;
-  logCount++;
 
   // Update visible status bar text
   const statusText = document.getElementById('statusbar-text');
@@ -139,32 +128,6 @@ function logEvent(msg, type = 'info') {
     statusText.style.color = type === 'error' ? 'var(--color-danger)' : type === 'warning' ? 'var(--color-warning)' : '';
     setTimeout(() => { if (statusText) statusText.style.color = ''; }, 4000);
   }
-
-  // Update event count badge on status bar toggle
-  const badge = document.getElementById('statusbar-count');
-  if (badge) {
-    badge.textContent = logCount > 99 ? '99+' : String(logCount);
-    badge.style.display = '';
-  }
-
-  // Update detail panel if open
-  const detailEl = document.getElementById('statusbar-detail');
-  if (detailEl && detailEl.classList.contains('open')) {
-    renderLogDetail(detailEl);
-  }
 }
 
-function renderLogDetail(el) {
-  if (!el) return;
-  el.innerHTML = logBuffer.slice(0, 100).map(e =>
-    `<div style="display:flex;gap:8px;padding:1px 0;color:${e.type==='error'?'var(--color-danger)':e.type==='warning'?'var(--color-warning)':''}"><span style="flex-shrink:0;opacity:0.5">[${e.time}]</span><span>${escapeHtml(e.msg)}</span></div>`
-  ).join('');
-}
-
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-export { apiGet, apiPost, apiPut, apiDelete, connectSSE, closeSSE, logEvent, renderLogDetail, logBuffer, MAX_LOG };
+export { apiGet, apiPost, apiPut, apiDelete, connectSSE, logEvent };

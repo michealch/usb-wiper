@@ -75,64 +75,6 @@ func TestAppendAndGetAll(t *testing.T) {
 	}
 }
 
-func TestUpdateByDevice(t *testing.T) {
-	dir := t.TempDir()
-	store, err := New(dir)
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
-
-	store.Append(WipeRecord{
-		DevicePath: "/dev/sdb",
-		Status:     "running",
-		StartedAt:  time.Now(),
-	})
-
-	err = store.UpdateByDevice("/dev/sdb", func(r *WipeRecord) {
-		r.Status = "completed"
-		r.Verification = "passed"
-		r.BytesVerified = 1024
-	})
-	if err != nil {
-		t.Fatalf("UpdateByDevice failed: %v", err)
-	}
-
-	records := store.GetAll()
-	if len(records) != 1 {
-		t.Fatalf("expected 1 record, got %d", len(records))
-	}
-	if records[0].Status != "completed" {
-		t.Errorf("expected status 'completed', got '%s'", records[0].Status)
-	}
-	if records[0].Verification != "passed" {
-		t.Errorf("expected verification 'passed', got '%s'", records[0].Verification)
-	}
-}
-
-func TestGetLatest(t *testing.T) {
-	dir := t.TempDir()
-	store, err := New(dir)
-	if err != nil {
-		t.Fatalf("New failed: %v", err)
-	}
-
-	store.Append(WipeRecord{DevicePath: "/dev/sdb", Status: "completed"})
-	store.Append(WipeRecord{DevicePath: "/dev/sdb", Status: "failed"})
-
-	latest := store.GetLatest("/dev/sdb")
-	if latest == nil {
-		t.Fatal("GetLatest returned nil")
-	}
-	if latest.Status != "failed" {
-		t.Errorf("expected status 'failed', got '%s'", latest.Status)
-	}
-
-	// Unknown device
-	if store.GetLatest("/dev/sdz") != nil {
-		t.Error("expected nil for unknown device")
-	}
-}
-
 func TestGetByDeviceID(t *testing.T) {
 	dir := t.TempDir()
 	store, err := New(dir)

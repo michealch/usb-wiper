@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"context"
 	"os"
 
 	"github.com/usb-wiper/internal/format"
@@ -25,8 +26,8 @@ func openOSFile(devicePath string) (*os.File, error) {
 // queue_helpers_other.go elsewhere). It retrieves device size in bytes.
 
 // formatDevice formats the device as FAT32.
-func formatDevice(devicePath string, unsafeAllow bool) error {
-	return format.FormatFAT32(devicePath, unsafeAllow)
+func formatDevice(ctx context.Context, devicePath string, unsafeAllow bool) error {
+	return format.FormatFAT32(ctx, devicePath, unsafeAllow)
 }
 
 // writeHistory persists a wipe job result to the history store.

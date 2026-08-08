@@ -1,6 +1,9 @@
 package wipe
 
 import (
+	"context"
+	"errors"
+	"os"
 	"testing"
 	"time"
 )
@@ -62,16 +65,6 @@ func TestProgressEvent_Defaults(t *testing.T) {
 	}
 }
 
-func TestWipeJob_Defaults(t *testing.T) {
-	job := WipeJob{}
-	if job.Status != "" {
-		t.Errorf("default Status should be empty, got %q", job.Status)
-	}
-	if job.StartedAt.IsZero() == false {
-		t.Error("default StartedAt should be zero time")
-	}
-}
-
 func TestBlkGetSize64_RegularFile(t *testing.T) {
 	// blkGetSize64 should fail on non-block-device
 	// This test verifies the ioctl error path
@@ -80,11 +73,93 @@ func TestBlkGetSize64_RegularFile(t *testing.T) {
 	t.Log("blkGetSize64 tested by integration")
 }
 
-func TestVerifyZero_EmptyDevice(t *testing.T) {
-	// verifyZero was replaced by VerifyRandomChunks.
-	// VerifyRandomChunks requires a real block device to test.
-	// The function is tested by integration when running against real USB drives.
-	t.Log("VerifyRandomChunks tested by integration")
+func TestVerifyRandomChunks_ExactChunkSizeDoesNotPanic(t *testing.T) {
+	// A device of exactly chunkSize (1 MiB) previously caused an integer
+	// divide-by-zero panic. Post-fix it must verify the whole device.
+	f := writeZeroFile(t, chunkSize)
+	defer f.Close()
+
+	n, err := VerifyRandomChunks(context.Background(), f.Name(), chunkSize, chunkSize, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != chunkSize {
+		t.Fatalf("expected %d bytes verified, got %d", chunkSize, n)
+	}
+}
+
+func TestVerifyRandomChunks_SubChunkDeviceDoesNotFalselyPass(t *testing.T) {
+	// A device smaller than one chunk previously underflowed maxOffset and
+	// verified zero bytes while still reporting a pass. Post-fix it must
+	// verify every byte of the device.
+	const size = uint64(512 << 10)
+	f := writeZeroFile(t, size)
+	defer f.Close()
+
+	n, err := VerifyRandomChunks(context.Background(), f.Name(), size, size, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != size {
+		t.Fatalf("expected %d bytes verified, got %d", size, n)
+	}
+}
+
+func TestVerifyRandomChunks_NonZeroDataFails(t *testing.T) {
+	f := writeZeroFile(t, chunkSize)
+	defer f.Close()
+	// Corrupt a single byte in the middle of the device.
+	if _, err := f.WriteAt([]byte{0xFF}, int64(chunkSize/2)); err != nil {
+		t.Fatalf("write corruption byte: %v", err)
+	}
+
+	_, err := VerifyRandomChunks(context.Background(), f.Name(), chunkSize, chunkSize, nil)
+	if err == nil {
+		t.Fatal("expected a non-nil error for non-zero data")
+	}
+}
+
+func TestVerifyRandomChunks_CancelledContext(t *testing.T) {
+	f := writeZeroFile(t, chunkSize)
+	defer f.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := VerifyRandomChunks(ctx, f.Name(), chunkSize, chunkSize, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+// writeZeroFile creates a temp file of the given size filled with zeros.
+func writeZeroFile(t *testing.T, size uint64) *os.File {
+	t.Helper()
+	f, err := os.CreateTemp("", "usb-wiper-verify-*")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(f.Name()) })
+	if err := f.Truncate(int64(size)); err != nil {
+		t.Fatalf("truncate temp file: %v", err)
+	}
+	return f
+}
+
+func TestSchemeRegistryListOrderIsStable(t *testing.T) {
+	want := []string{"zero", "nist-clear", "random", "dod-3pass"}
+	r := NewSchemeRegistry()
+	for i := 0; i < 20; i++ {
+		got := r.List()
+		if len(got) != len(want) {
+			t.Fatalf("iteration %d: got %d schemes, want %d", i, len(got), len(want))
+		}
+		for j := range want {
+			if got[j].ID != want[j] {
+				t.Fatalf("iteration %d: position %d = %q, want %q", i, j, got[j].ID, want[j])
+			}
+		}
+	}
 }
 
 func TestProgressEvent_JSON(t *testing.T) {

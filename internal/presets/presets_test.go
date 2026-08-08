@@ -126,4 +126,3 @@ func TestPersistence(t *testing.T) {
 		t.Fatal("preset not found after reload")
 	}
 }
-

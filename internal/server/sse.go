@@ -25,8 +25,8 @@ type SSEHub struct {
 	nextID uint64
 
 	// Ring buffer for Last-Event-ID replay.
-	ring    [sseRingSize]sseEntry
-	ringMu  sync.RWMutex
+	ring     [sseRingSize]sseEntry
+	ringMu   sync.RWMutex
 	ringHead uint64 // index of the oldest entry (mod sseRingSize)
 	ringFill uint64 // how many entries have been stored (capped at sseRingSize)
 }

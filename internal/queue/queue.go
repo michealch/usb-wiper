@@ -76,8 +76,8 @@ type Queue struct {
 	pending     []*Job          // FIFO wait list
 	maxParallel int
 	sem         chan struct{}
+	wg          sync.WaitGroup // tracks in-flight runJob goroutines for shutdown
 	sseHub      SSEHub
-	persist     *persistence.Store
 	history     *persistence.Store
 	schemes     *wipe.SchemeRegistry
 	unsafe      bool
@@ -96,8 +96,14 @@ type Config struct {
 
 // New creates a new wipe job queue.
 func New(cfg Config) *Queue {
-	if cfg.MaxParallel <= 0 {
+	// Clamp to the 1-4 range the UI offers. settings.json is user-editable;
+	// a zero or negative value would create an unbuffered semaphore and
+	// deadlock the first job.
+	if cfg.MaxParallel < 1 {
 		cfg.MaxParallel = 2
+	}
+	if cfg.MaxParallel > 4 {
+		cfg.MaxParallel = 4
 	}
 	q := &Queue{
 		jobs:        make(map[string]*Job),
@@ -364,6 +370,7 @@ func (q *Queue) dispatch() {
 	q.mu.Unlock()
 
 	// Start job in background
+	q.wg.Add(1)
 	go q.runJob(job)
 }
 
@@ -377,6 +384,8 @@ func (q *Queue) removePending(job *Job) {
 }
 
 func (q *Queue) runJob(job *Job) {
+	defer q.wg.Done()
+
 	// Acquire concurrency semaphore
 	q.sem <- struct{}{}
 	defer func() { <-q.sem }()
@@ -471,29 +480,13 @@ func (q *Queue) runJob(job *Job) {
 
 		// Re-validate safety before reading device for verification
 		if err := device.IsSafeToWipe(job.DevicePath, q.unsafe); err != nil {
-			q.mu.Lock()
-			job.Status = StatusFailed
-			job.ErrorMessage = "Safety re-check before verification failed: " + err.Error()
-			job.CompletedAt = &now
-			delete(q.byDevice, job.DevicePath)
-			q.mu.Unlock()
-			writeHistory(q.history, job)
-			q.broadcastJob(job)
-			q.signalDispatch()
+			q.failJob(job, "Safety re-check before verification failed: "+err.Error())
 			return
 		}
 
 		devSize, sizeErr := getDeviceSize(job.DevicePath)
 		if sizeErr != nil {
-			q.mu.Lock()
-			job.Status = StatusFailed
-			job.ErrorMessage = "Cannot determine device size for verification: " + sizeErr.Error()
-			job.CompletedAt = &now
-			delete(q.byDevice, job.DevicePath)
-			q.mu.Unlock()
-			writeHistory(q.history, job)
-			q.broadcastJob(job)
-			q.signalDispatch()
+			q.failJob(job, "Cannot determine device size for verification: "+sizeErr.Error())
 			return
 		}
 		verifySize := uint64(job.VerifySizeGB) * 1024 * 1024 * 1024
@@ -513,24 +506,20 @@ func (q *Queue) runJob(job *Job) {
 			}
 		}()
 
-		vBytes, vErr := wipe.VerifyRandomChunks(job.DevicePath, devSize, verifySize, vProgress)
+		vBytes, vErr := wipe.VerifyRandomChunks(ctx, job.DevicePath, devSize, verifySize, vProgress)
 		close(vProgress)
 		if vErr != nil {
 			log.Printf("verification failed for %s: %v", job.DevicePath, vErr)
 			q.mu.Lock()
-			job.Status = StatusFailed
-			job.ErrorMessage = "Verification failed: " + vErr.Error()
 			job.Verified = "failed"
-			job.CompletedAt = &now
-			delete(q.byDevice, job.DevicePath)
 			q.mu.Unlock()
-			writeHistory(q.history, job)
-			q.broadcastJob(job)
-			q.signalDispatch()
+			q.failJob(job, "Verification failed: "+vErr.Error())
 			return
 		}
+		q.mu.Lock()
 		job.BytesVerified = vBytes
 		job.Verified = "passed"
+		q.mu.Unlock()
 	}
 
 	// ---- Auto-format ----
@@ -543,30 +532,14 @@ func (q *Queue) runJob(job *Job) {
 		// Re-validate safety before formatting (defense in depth; format.FormatFAT32
 		// also checks, but the queue worker should not rely on the callee).
 		if err := device.IsSafeToWipe(job.DevicePath, q.unsafe); err != nil {
-			q.mu.Lock()
-			job.Status = StatusFailed
-			job.ErrorMessage = "Safety re-check before format failed: " + err.Error()
-			job.CompletedAt = &now
-			delete(q.byDevice, job.DevicePath)
-			q.mu.Unlock()
-			writeHistory(q.history, job)
-			q.broadcastJob(job)
-			q.signalDispatch()
+			q.failJob(job, "Safety re-check before format failed: "+err.Error())
 			return
 		}
 
 		// Inline format call — format package dependency
-		if fErr := formatDevice(job.DevicePath, q.unsafe); fErr != nil {
+		if fErr := formatDevice(ctx, job.DevicePath, q.unsafe); fErr != nil {
 			log.Printf("format failed for %s: %v", job.DevicePath, fErr)
-			q.mu.Lock()
-			job.Status = StatusFailed
-			job.ErrorMessage = "Wipe completed but format failed: " + fErr.Error()
-			job.CompletedAt = &now
-			delete(q.byDevice, job.DevicePath)
-			q.mu.Unlock()
-			writeHistory(q.history, job)
-			q.broadcastJob(job)
-			q.signalDispatch()
+			q.failJob(job, "Wipe completed but format failed: "+fErr.Error())
 			return
 		}
 	}
@@ -575,7 +548,8 @@ func (q *Queue) runJob(job *Job) {
 	q.mu.Lock()
 	job.Status = StatusCompleted
 	job.Progress = 100
-	job.CompletedAt = &now
+	completed := time.Now()
+	job.CompletedAt = &completed
 	delete(q.byDevice, job.DevicePath)
 	q.mu.Unlock()
 
@@ -608,6 +582,9 @@ func (q *Queue) failJob(job *Job, msg string) {
 	q.signalDispatch()
 }
 
+// Wait blocks until every dispatched job goroutine has returned.
+func (q *Queue) Wait() { q.wg.Wait() }
+
 func (q *Queue) signalDispatch() {
 	select {
 	case q.dispatchCh <- struct{}{}:
@@ -615,10 +592,10 @@ func (q *Queue) signalDispatch() {
 	}
 }
 
-func (q *Queue) broadcastJob(job *Job) {
-	// Take a snapshot under lock, then broadcast without holding the lock.
-	q.mu.Lock()
-	ev := wipe.ProgressEvent{
+// jobEvent snapshots the job fields into a broadcast event. Callers must
+// hold q.mu or otherwise guarantee the fields are stable.
+func jobEvent(job *Job) wipe.ProgressEvent {
+	return wipe.ProgressEvent{
 		EventType:    "job",
 		DevicePath:   job.DevicePath,
 		Status:       string(job.Status),
@@ -628,6 +605,12 @@ func (q *Queue) broadcastJob(job *Job) {
 		BytesWritten: job.BytesVerified,
 		Timestamp:    time.Now(),
 	}
+}
+
+func (q *Queue) broadcastJob(job *Job) {
+	// Take a snapshot under lock, then broadcast without holding the lock.
+	q.mu.Lock()
+	ev := jobEvent(job)
 	q.mu.Unlock()
 
 	q.sseHub.Broadcast(ev)
@@ -635,16 +618,7 @@ func (q *Queue) broadcastJob(job *Job) {
 
 func (q *Queue) broadcastJobLocked(job *Job) {
 	// Same as broadcastJob but caller already holds q.mu.
-	q.sseHub.Broadcast(wipe.ProgressEvent{
-		EventType:    "job",
-		DevicePath:   job.DevicePath,
-		Status:       string(job.Status),
-		Percent:      job.Progress,
-		CurrentPass:  job.CurrentPass,
-		TotalPasses:  job.TotalPasses,
-		BytesWritten: job.BytesVerified,
-		Timestamp:    time.Now(),
-	})
+	q.sseHub.Broadcast(jobEvent(job))
 }
 
 // getDeviceSize opens the device and queries its size via ioctl.

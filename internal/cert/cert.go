@@ -22,13 +22,13 @@ const CertificateVersion = 2
 
 // Certificate is a tamper-evident record of a completed wipe operation.
 type Certificate struct {
-	Version     int              `json:"version"`
-	Tool        ToolInfo         `json:"tool"`
-	Host        HostInfo         `json:"host"`
-	Device      DeviceInfo       `json:"device"`
-	Wipe        WipeInfo         `json:"wipe"`
+	Version      int              `json:"version"`
+	Tool         ToolInfo         `json:"tool"`
+	Host         HostInfo         `json:"host"`
+	Device       DeviceInfo       `json:"device"`
+	Wipe         WipeInfo         `json:"wipe"`
 	Verification VerificationInfo `json:"verification"`
-	Signature   string           `json:"signature,omitempty"`
+	Signature    string           `json:"signature,omitempty"`
 }
 
 type ToolInfo struct {
@@ -43,23 +43,23 @@ type HostInfo struct {
 }
 
 type DeviceInfo struct {
-	Model    string `json:"model"`
-	Serial   string `json:"serial"`
-	Size     string `json:"size"`
+	Model     string `json:"model"`
+	Serial    string `json:"serial"`
+	Size      string `json:"size"`
 	SysfsPath string `json:"sysfsPath"`
 }
 
 type WipeInfo struct {
-	SchemeID    string `json:"schemeId"`
-	SchemeName  string `json:"schemeName"`
-	Passes      int    `json:"passes"`
-	StartedAt   string `json:"startedAt"`
-	CompletedAt string `json:"completedAt"`
-	Duration    string `json:"duration"`
+	SchemeID     string `json:"schemeId"`
+	SchemeName   string `json:"schemeName"`
+	Passes       int    `json:"passes"`
+	StartedAt    string `json:"startedAt"`
+	CompletedAt  string `json:"completedAt"`
+	Duration     string `json:"duration"`
 	BytesWritten string `json:"bytesWritten"`
-	AvgSpeed    string `json:"avgSpeed"`
-	PreHash     string `json:"preHash,omitempty"`
-	PostHash    string `json:"postHash,omitempty"`
+	AvgSpeed     string `json:"avgSpeed"`
+	PreHash      string `json:"preHash,omitempty"`
+	PostHash     string `json:"postHash,omitempty"`
 }
 
 type VerificationInfo struct {
@@ -233,37 +233,6 @@ func (s *Signer) Verify(certData []byte) (bool, error) {
 	return ed25519.Verify(s.publicKey, canonical, sigBytes), nil
 }
 
-// VerifyAgainstPubKey verifies a certificate against a given public key.
-func VerifyAgainstPubKey(certData []byte, pubKeyBase64 string) (bool, error) {
-	pubBytes, err := base64.StdEncoding.DecodeString(pubKeyBase64)
-	if err != nil {
-		return false, fmt.Errorf("decode pubkey: %w", err)
-	}
-	pub := ed25519.PublicKey(pubBytes)
-
-	var cert Certificate
-	if err := json.Unmarshal(certData, &cert); err != nil {
-		return false, fmt.Errorf("parse: %w", err)
-	}
-	if cert.Version != 0 && cert.Version != CertificateVersion {
-		return false, fmt.Errorf("unsupported certificate version %d (this build only verifies v%d)", cert.Version, CertificateVersion)
-	}
-
-	sig := cert.Signature
-	cert.Signature = ""
-	canonical, err := canonicalJSON(&cert)
-	if err != nil {
-		return false, err
-	}
-
-	sigBytes, err := base64.StdEncoding.DecodeString(sig)
-	if err != nil {
-		return false, fmt.Errorf("decode sig: %w", err)
-	}
-
-	return ed25519.Verify(pub, canonical, sigBytes), nil
-}
-
 // canonicalJSON produces a stable JSON representation for signing.
 // It ensures keys are sorted and whitespace is minimized.
 func canonicalJSON(v interface{}) ([]byte, error) {
@@ -305,16 +274,16 @@ func NewCertificate(toolVersion, toolBuildTime, devicePath, model, serial string
 			SysfsPath: devicePath,
 		},
 		Wipe: WipeInfo{
-			SchemeID:    schemeID,
-			SchemeName:  schemeName,
-			Passes:      passes,
-			StartedAt:   startedAt.UTC().Format(time.RFC3339),
-			CompletedAt: completedAt.UTC().Format(time.RFC3339),
-			Duration:    completedAt.Sub(startedAt).Round(time.Second).String(),
+			SchemeID:     schemeID,
+			SchemeName:   schemeName,
+			Passes:       passes,
+			StartedAt:    startedAt.UTC().Format(time.RFC3339),
+			CompletedAt:  completedAt.UTC().Format(time.RFC3339),
+			Duration:     completedAt.Sub(startedAt).Round(time.Second).String(),
 			BytesWritten: fmt.Sprintf("%d", bytesWritten),
-			AvgSpeed:    fmt.Sprintf("%d B/s", avgSpeedBytes),
-			PreHash:     preHash,
-			PostHash:    postHash,
+			AvgSpeed:     fmt.Sprintf("%d B/s", avgSpeedBytes),
+			PreHash:      preHash,
+			PostHash:     postHash,
 		},
 		Verification: VerificationInfo{
 			BytesVerified: fmt.Sprintf("%d", bytesVerified),

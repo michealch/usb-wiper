@@ -13,7 +13,6 @@ services:
     ports:
       - "8181:8181"
     environment:
-      - LOG_LEVEL=debug
       - PORT=8181
     restart: unless-stopped
 

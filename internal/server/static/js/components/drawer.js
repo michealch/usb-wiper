@@ -1,112 +1,79 @@
 // Slide-in drawer component (right side)
 
+import { apiGet } from '../api.js';
+import { escapeHtml, formatBytes, formatDateTime } from '../util.js';
+import { attachOverlay } from './overlay.js';
+import { initTabs } from './tabs.js';
+
 let drawerEl, drawerOverlay, drawerBody, drawerTitle;
+let overlayHandle = null;
+let tabsHandle = null;
 let currentDevice = null;
-let activeTab = 'overview';
-let deviceHealthCache = {};
-let deviceHistoryCache = {};
-let deviceHealthHistoryCache = {};
 
 function initDrawer() {
   drawerOverlay = document.createElement('div');
-  drawerOverlay.className = 'drawer-overlay';
-  drawerOverlay.onclick = closeDrawer;
-  
+  drawerOverlay.className = 'overlay overlay-drawer';
+  drawerOverlay.onclick = (e) => { if (e.target === drawerOverlay) closeDrawer(); };
+
   drawerEl = document.createElement('div');
   drawerEl.className = 'drawer';
-  
+  drawerEl.tabIndex = -1;
+
   drawerEl.innerHTML = `
     <div class="drawer-header">
       <h2 id="drawer-title">Device Details</h2>
       <button class="btn btn-ghost btn-sm" id="drawer-close" aria-label="Close drawer">×</button>
     </div>
-    <div class="drawer-tabs" id="drawer-tabs" role="tablist">
-      <button class="drawer-tab active" data-tab="overview" role="tab" aria-selected="true" aria-controls="tab-overview" id="drawer-tab-overview">Overview</button>
-      <button class="drawer-tab" data-tab="smart" role="tab" aria-selected="false" aria-controls="tab-smart" id="drawer-tab-smart">SMART</button>
-      <button class="drawer-tab" data-tab="history" role="tab" aria-selected="false" aria-controls="tab-history" id="drawer-tab-history">History</button>
-    </div>
-    <div class="drawer-body" id="drawer-body">
-      <div class="drawer-tab-content active" id="tab-overview" role="tabpanel" aria-labelledby="drawer-tab-overview"></div>
-      <div class="drawer-tab-content" id="tab-smart" role="tabpanel" aria-labelledby="drawer-tab-smart"></div>
-      <div class="drawer-tab-content" id="tab-history" role="tabpanel" aria-labelledby="drawer-tab-history"></div>
-    </div>
+    <div id="drawer-tablist"></div>
+    <div class="drawer-body" id="drawer-body"></div>
   `;
-  
+
   document.body.appendChild(drawerOverlay);
   document.body.appendChild(drawerEl);
-  
+
   document.getElementById('drawer-close').onclick = closeDrawer;
   drawerTitle = document.getElementById('drawer-title');
   drawerBody = document.getElementById('drawer-body');
-  
-  // Tab switching
-  const tabs = Array.from(document.querySelectorAll('.drawer-tab'));
-  tabs.forEach((tab, idx) => {
-    tab.onclick = () => activateTab(tab);
-    tab.onkeydown = (e) => {
-      if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-        e.preventDefault();
-        const dir = e.key === 'ArrowRight' ? 1 : -1;
-        const next = tabs[(idx + dir + tabs.length) % tabs.length];
-        activateTab(next);
-        next.focus();
-      }
-    };
-  });
 
-  function activateTab(tab) {
-    tabs.forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
-    tab.classList.add('active');
-    tab.setAttribute('aria-selected', 'true');
-    activeTab = tab.dataset.tab;
-    document.querySelectorAll('.drawer-tab-content').forEach(c => c.classList.remove('active'));
-    document.getElementById('tab-' + activeTab).classList.add('active');
-    if (currentDevice) loadTabContent(currentDevice, activeTab);
-  }
+  overlayHandle = attachOverlay(drawerOverlay, drawerEl, { onClose: () => { currentDevice = null; } });
+
+  tabsHandle = initTabs(document.getElementById('drawer-tablist'), {
+    idPrefix: 'devinfo',
+    tabs: [
+      { id: 'overview', label: 'Overview' },
+      { id: 'smart', label: 'SMART' },
+      { id: 'history', label: 'History' }
+    ],
+    activeId: 'overview',
+    onSelect: (id, panelEl) => loadTabContent(currentDevice, id, panelEl),
+    panelsEl: drawerBody
+  });
 }
 
 function openDrawer(device, initialTab = 'overview') {
   currentDevice = device;
   drawerTitle.textContent = device.name || device.path;
-
-  // Reset tabs
-  document.querySelectorAll('.drawer-tab').forEach(t => { t.classList.remove('active'); t.setAttribute('aria-selected', 'false'); });
-  let targetTab = document.querySelector(`.drawer-tab[data-tab="${initialTab}"]`);
-  if (!targetTab) targetTab = document.querySelector('.drawer-tab[data-tab="overview"]');
-  activeTab = targetTab.dataset.tab;
-  targetTab.classList.add('active');
-  targetTab.setAttribute('aria-selected', 'true');
-  document.querySelectorAll('.drawer-tab-content').forEach(c => c.classList.remove('active'));
-  document.getElementById('tab-' + activeTab).classList.add('active');
-  
-  drawerOverlay.classList.add('open');
-  drawerEl.classList.add('open');
-  
-  loadTabContent(device, activeTab);
+  // initTabs fires onSelect once at startup (before any device exists), so the
+  // initial panel is empty. Re-select the requested tab now that we have a
+  // device to force loadTabContent to render into it.
+  tabsHandle.select(initialTab === 'overview' ? 'overview' : initialTab);
+  overlayHandle.open();
 }
 
 function closeDrawer() {
-  drawerOverlay.classList.remove('open');
-  drawerEl.classList.remove('open');
-  currentDevice = null;
+  overlayHandle.close();
 }
 
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && drawerOverlay.classList.contains('open')) {
-    closeDrawer();
-  }
-});
-
-function loadTabContent(device, tab) {
+function loadTabContent(device, tab, panelEl) {
+  if (!device) return;
   switch (tab) {
-    case 'overview': renderOverviewTab(device); break;
-    case 'smart': renderSmartTab(device); break;
-    case 'history': renderHistoryTab(device); break;
+    case 'overview': renderOverviewTab(device, panelEl); break;
+    case 'smart': renderSmartTab(device, panelEl); break;
+    case 'history': renderHistoryTab(device, panelEl); break;
   }
 }
 
-function renderOverviewTab(d) {
-  const el = document.getElementById('tab-overview');
+function renderOverviewTab(d, el) {
   el.innerHTML = `
     <div class="form-group"><label>Device Path</label><div style="font-family:var(--font-mono)">${escapeHtml(d.path)}</div></div>
     <div class="form-group"><label>Device ID</label><div style="font-family:var(--font-mono);overflow-wrap:anywhere">${escapeHtml(d.deviceId || '—')}</div></div>
@@ -124,17 +91,12 @@ function renderOverviewTab(d) {
   `;
 }
 
-async function renderSmartTab(device) {
-  const el = document.getElementById('tab-smart');
+async function renderSmartTab(device, el) {
   el.innerHTML = '<p class="muted">Loading SMART data...</p>';
   
   try {
-    const key = deviceCacheKey(device);
-    if (!deviceHealthCache[key]) {
-      const data = await apiGet('/api/health?device=' + encodeURIComponent(device.path));
-      deviceHealthCache[key] = data;
-    }
-    const h = deviceHealthCache[key];
+    const data = await apiGet('/api/health?device=' + encodeURIComponent(device.path));
+    const h = data;
     el.innerHTML = renderHealthTable(h) + await renderHealthHistory(device);
   } catch (e) {
     el.innerHTML = `<p class="muted">SMART data unavailable</p><p class="muted">${escapeHtml(e.message)}</p>`;
@@ -197,8 +159,7 @@ function formatNVMeDataUnits(units) {
   return formatBytes(units * 512000);
 }
 
-async function renderHistoryTab(device) {
-  const el = document.getElementById('tab-history');
+async function renderHistoryTab(device, el) {
   el.innerHTML = '<p class="muted">Loading history...</p>';
   
   try {
@@ -207,11 +168,8 @@ async function renderHistoryTab(device) {
       return;
     }
     const key = deviceCacheKey(device);
-    if (!deviceHistoryCache[key]) {
-      const data = await apiGet('/api/history?deviceId=' + encodeURIComponent(device.deviceId));
-      deviceHistoryCache[key] = data.history || [];
-    }
-    const history = deviceHistoryCache[key];
+    const data = await apiGet('/api/history?deviceId=' + encodeURIComponent(device.deviceId));
+    const history = data.history || [];
     if (history.length === 0) {
       el.innerHTML = '<p class="muted">No wipe history for this device.</p>';
       return;
@@ -220,11 +178,11 @@ async function renderHistoryTab(device) {
       <thead><tr><th scope="col">Status</th><th scope="col">Verification</th><th scope="col">Size</th><th scope="col">Duration</th><th scope="col">Finished</th></tr></thead>
       <tbody>${history.map(r => `
         <tr>
-          <td><span class="badge ${r.status === 'completed' ? 'badge-success' : r.status === 'failed' ? 'badge-danger' : 'badge-neutral'}">${r.status}</span></td>
-          <td>${r.verification || '—'}</td>
+          <td><span class="badge ${r.status === 'completed' ? 'badge-success' : r.status === 'failed' ? 'badge-danger' : 'badge-neutral'}">${escapeHtml(r.status)}</span></td>
+          <td>${escapeHtml(r.verification || '—')}</td>
           <td>${formatBytes(r.sizeBytes)}</td>
-          <td>${r.duration || '—'}</td>
-          <td>${r.finishedAt ? new Date(r.finishedAt).toLocaleString() : '—'}</td>
+          <td>${escapeHtml(r.duration || '—')}</td>
+          <td>${formatDateTime(r.finishedAt)}</td>
         </tr>`).join('')}</tbody></table>`;
   } catch (e) {
     el.innerHTML = '<p class="muted">History unavailable</p>';
@@ -235,12 +193,8 @@ async function renderHealthHistory(device) {
   if (!isTrustedIdentity(device)) {
     return '<p class="muted mt-3">SMART history is limited to this uncertain attachment.</p>';
   }
-  const key = deviceCacheKey(device);
-  if (!deviceHealthHistoryCache[key]) {
-    const data = await apiGet('/api/health-history?deviceId=' + encodeURIComponent(device.deviceId));
-    deviceHealthHistoryCache[key] = data.history || [];
-  }
-  const history = deviceHealthHistoryCache[key].slice(0, 8);
+  const data = await apiGet('/api/health-history?deviceId=' + encodeURIComponent(device.deviceId));
+  const history = (data.history || []).slice(0, 8);
   if (history.length === 0) {
     return '<p class="muted mt-3">No saved SMART snapshots yet.</p>';
   }
@@ -250,7 +204,7 @@ async function renderHealthHistory(device) {
       <thead><tr><th scope="col">Captured</th><th scope="col">Status</th><th scope="col">Temp</th><th scope="col">Hours</th><th scope="col">Wear</th><th scope="col">Errors</th></tr></thead>
       <tbody>${history.map(r => `
         <tr>
-          <td>${r.capturedAt ? new Date(r.capturedAt).toLocaleString() : '—'}</td>
+          <td>${formatDateTime(r.capturedAt)}</td>
           <td>${escapeHtml(r.healthStatus || 'UNKNOWN')}</td>
           <td>${r.temperatureC ? escapeHtml(String(r.temperatureC)) + '°C' : '—'}</td>
           <td>${r.powerOnHours ? Number(r.powerOnHours).toLocaleString() : '—'}</td>
@@ -275,7 +229,4 @@ function identityLabel(device) {
   return confidence.charAt(0).toUpperCase() + confidence.slice(1) + ' confidence (' + source + ')';
 }
 
-import { apiGet } from '../api.js';
-import { escapeHtml, formatBytes } from '../util.js';
-
-export { initDrawer, openDrawer, closeDrawer, deviceHealthCache, deviceHistoryCache };
+export { initDrawer, openDrawer, closeDrawer };

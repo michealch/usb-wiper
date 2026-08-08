@@ -12,12 +12,12 @@ import (
 
 // Event represents a single auditable action.
 type Event struct {
-	Timestamp  time.Time         `json:"ts"`
-	Actor      string            `json:"actor"`
-	Event      string            `json:"event"`
-	Target     string            `json:"target,omitempty"`
-	Details    map[string]interface{} `json:"details,omitempty"`
-	RequestID  string            `json:"requestId,omitempty"`
+	Timestamp time.Time              `json:"ts"`
+	Actor     string                 `json:"actor"`
+	Event     string                 `json:"event"`
+	Target    string                 `json:"target,omitempty"`
+	Details   map[string]interface{} `json:"details,omitempty"`
+	RequestID string                 `json:"requestId,omitempty"`
 }
 
 // Logger provides thread-safe append-only audit logging to a file.

@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"net"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -18,7 +16,6 @@ import (
 	cert2 "github.com/usb-wiper/internal/cert"
 	"github.com/usb-wiper/internal/config"
 	"github.com/usb-wiper/internal/device"
-	"github.com/usb-wiper/internal/metrics"
 	"github.com/usb-wiper/internal/persistence"
 	"github.com/usb-wiper/internal/presets"
 	"github.com/usb-wiper/internal/queue"
@@ -41,16 +38,14 @@ type Server struct {
 	schemes       *wipe.SchemeRegistry
 	signer        *cert2.Signer
 	auditLog      *audit.Logger
-	metrics       *metrics.Registry
 	server        *http.Server
 }
 
 // New creates a new Server instance.
-func New(port string, unsafeAllowAllUSB bool, dataDir string) *Server {
+func New(port string, unsafeAllowAllUSB bool, dataDir string) (*Server, error) {
 	history, err := persistence.New(dataDir)
 	if err != nil {
-		log.Printf("WARNING: failed to initialize history store: %v (wipes will not be persisted)", err)
-		history, _ = persistence.New("")
+		return nil, fmt.Errorf("initialize history store: %w", err)
 	}
 
 	healthHistory, err := persistence.NewHealthStore(dataDir)
@@ -67,22 +62,21 @@ func New(port string, unsafeAllowAllUSB bool, dataDir string) *Server {
 
 	presetStore, err := presets.New(dataDir)
 	if err != nil {
-		log.Printf("WARNING: failed to initialize presets: %v", err)
-		presetStore, _ = presets.New("")
+		return nil, fmt.Errorf("initialize presets store: %w", err)
 	}
+
+	cfg := config.New(unsafeAllowAllUSB, dataDir)
 
 	schemeReg := wipe.NewSchemeRegistry()
 	sseHub := NewSSEHub()
 
 	jobs := queue.New(queue.Config{
-		MaxParallel: 2,
+		MaxParallel: cfg.Get().MaxParallelJobs,
 		SSEHub:      sseHub,
 		History:     history,
 		Schemes:     schemeReg,
 		UnsafeAllow: unsafeAllowAllUSB,
 	})
-
-	cfg := config.New(unsafeAllowAllUSB, dataDir)
 
 	signer, err := cert2.NewSigner(dataDir)
 	if err != nil {
@@ -102,13 +96,6 @@ func New(port string, unsafeAllowAllUSB bool, dataDir string) *Server {
 		})
 	}
 
-	metricsReg := metrics.New()
-	metricsReg.NewCounter("usb_wiper_wipes_total", "Total number of wipe jobs started")
-	metricsReg.NewCounter("usb_wiper_wipes_completed", "Total number of wipe jobs completed successfully")
-	metricsReg.NewCounter("usb_wiper_wipes_failed", "Total number of wipe jobs that failed")
-	metricsReg.NewGauge("usb_wiper_jobs_running", "Number of currently running wipe jobs")
-	metricsReg.NewGauge("usb_wiper_jobs_queued", "Number of queued wipe jobs")
-
 	return &Server{
 		port:          port,
 		config:        cfg,
@@ -121,8 +108,7 @@ func New(port string, unsafeAllowAllUSB bool, dataDir string) *Server {
 		schemes:       schemeReg,
 		signer:        signer,
 		auditLog:      auditLog,
-		metrics:       metricsReg,
-	}
+	}, nil
 }
 
 // Start begins listening and serving HTTP requests.
@@ -151,7 +137,6 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Wipe (queue-based)
 	mux.HandleFunc("POST /api/wipe", s.handlePostWipe)
-	mux.HandleFunc("POST /api/test-wipe", s.handlePostTestWipe)
 	mux.HandleFunc("POST /api/cancel", s.handlePostCancel)
 
 	// Jobs
@@ -171,8 +156,6 @@ func (s *Server) Start(ctx context.Context) error {
 	// Config / Settings
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
-	mux.HandleFunc("GET /api/config", s.handleGetConfig)   // backward compat
-	mux.HandleFunc("POST /api/config", s.handlePostConfig) // backward compat
 
 	// Certificates
 	mux.HandleFunc("GET /api/cert/pubkey", s.handleGetPubKey)
@@ -195,7 +178,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 
 	// Apply middleware
-	handler := withLogging(withRecovery(withCORS(mux)))
+	handler := withLogging(withRecovery(withOriginCheck(withCORS(mux))))
 
 	s.server = &http.Server{
 		Addr:         ":" + s.port,
@@ -207,31 +190,6 @@ func (s *Server) Start(ctx context.Context) error {
 
 	log.Printf("server listening on :%s", s.port)
 	log.Println("open http://localhost:" + s.port)
-
-	// Start separate metrics listener (default 127.0.0.1:9090).
-	// Set METRICS_BIND="" to disable entirely.
-	metricsBind := os.Getenv("METRICS_BIND")
-	if metricsBind == "" {
-		metricsBind = "127.0.0.1:9090" // loopback-only by default
-	}
-	if metricsBind != "off" {
-		go func() {
-			metricsMux := http.NewServeMux()
-			metricsMux.Handle("GET /metrics", s.metrics.Handler())
-			ln, err := net.Listen("tcp", metricsBind)
-			if err != nil {
-				log.Printf("WARNING: metrics listener on %s failed: %v (metrics disabled)", metricsBind, err)
-				return
-			}
-			log.Printf("metrics listening on %s", metricsBind)
-			metricsServer := &http.Server{Handler: metricsMux, ReadTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second}
-			go func() {
-				<-ctx.Done()
-				metricsServer.Close()
-			}()
-			metricsServer.Serve(ln)
-		}()
-	}
 
 	// Start background device watcher
 	go s.watchDevices(ctx)
@@ -255,6 +213,14 @@ func (s *Server) Start(ctx context.Context) error {
 		log.Println("shutting down server")
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
 			log.Printf("shutdown error: %v", err)
+		}
+		log.Println("waiting for in-flight wipe jobs to stop")
+		done := make(chan struct{})
+		go func() { s.jobs.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			log.Println("WARNING: timed out waiting for wipe jobs; exiting anyway")
 		}
 		return nil
 	case err := <-errCh:
@@ -282,6 +248,16 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// decodeJSON decodes the request body into dst, writing a 400 and returning false when the
+// body is not valid JSON.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	return true
 }
 
 func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, ev wipe.ProgressEvent) {

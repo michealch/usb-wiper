@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1.26
+
+# Debug image: builds the app from the mounted source tree with debug
+# symbols and runs it under dlv (headless, listening on :2345), so
+# `make debug` gives an attachable Go debugger without any host toolchain.
+ARG BASE_IMAGE=golang:1.26
+FROM ${BASE_IMAGE}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    smartmontools \
+    dosfstools \
+    parted \
+    util-linux \
+    e2fsprogs \
+    wget \
+    hdparm \
+    nvme-cli \
+    && go install github.com/go-delve/delve/cmd/dlv@latest \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+EXPOSE 2345 8181
+# Build an unstripped binary from the mounted source, then run it under dlv.
+# The container's own entrypoint is used (no `make build` output dependency).
+ENTRYPOINT ["sh", "-c", "go build -gcflags='all=-N -l' -o /tmp/usb-wiper-debug ./cmd/usb-wiper && exec dlv exec /tmp/usb-wiper-debug --headless --listen=:2345 --api-version=2 --accept-multiclient --continue"]

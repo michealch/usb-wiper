@@ -43,14 +43,10 @@ button,input,select,textarea{
   grid-template-areas:
     "sidebar topbar"
     "sidebar main"
-    "statusbar statusbar"
-    "detail detail";
+    "statusbar statusbar";
   grid-template-columns:var(--sidebar-width) 1fr;
-  grid-template-rows:var(--topbar-height) minmax(0,1fr) var(--statusbar-height) 0;
+  grid-template-rows:var(--topbar-height) minmax(0,1fr) var(--statusbar-height);
   height:100vh;
-}
-.app-shell.detail-open{
-  grid-template-rows:var(--topbar-height) minmax(0,1fr) var(--statusbar-height) 160px;
 }
 
 /* Topbar */
@@ -142,15 +138,6 @@ button,input,select,textarea{
   padding:0 var(--space-3);
 }
 
-.sidebar-group{
-  display:contents;
-}
-.sidebar-group + .sidebar-group{margin-top:0;}
-
-.sidebar-group-label{
-  display:none;
-}
-
 .sidebar-link{
   display:flex;
   align-items:center;
@@ -209,19 +196,6 @@ button,input,select,textarea{
   stroke-width:2;
 }
 
-.sidebar-badge{
-  margin-left:auto;
-  font-size:var(--text-2xs);
-  font-weight:var(--weight-semibold);
-  background:var(--color-accent);
-  color:var(--color-accent-text);
-  padding:1px 6px;
-  border-radius:9px;
-  min-width:18px;
-  text-align:center;
-  line-height:1.4;
-}
-
 /* Main content area */
 .main{
   grid-area:main;
@@ -231,7 +205,7 @@ button,input,select,textarea{
   scroll-behavior:smooth;
 }
 
-/* Status bar (replaces event log) */
+/* Status bar — single ambient ticker line */
 .statusbar{
   grid-area:statusbar;
   background:var(--color-surface);
@@ -247,12 +221,6 @@ button,input,select,textarea{
   min-width:0;
 }
 
-.statusbar-prefix{
-  color:var(--color-accent);
-  font-weight:var(--weight-semibold);
-  flex-shrink:0;
-}
-
 .statusbar-text{
   white-space:nowrap;
   overflow:hidden;
@@ -261,43 +229,6 @@ button,input,select,textarea{
   transition:opacity var(--dur-normal);
   flex:1 1 auto;
   min-width:0;
-}
-
-.statusbar-btn{
-  display:inline-flex;
-  align-items:center;
-  gap:var(--space-1);
-  background:var(--color-surface-2);
-  border:1px solid var(--color-border);
-  color:var(--color-text-dim);
-  cursor:pointer;
-  font-size:var(--text-xs);
-  font-weight:var(--weight-semibold);
-  font-family:var(--font-sans);
-  min-height:24px;
-  padding:2px 8px;
-  border-radius:var(--radius-full);
-  margin-left:auto;
-  flex-shrink:0;
-  line-height:1;
-}
-.statusbar-btn span:first-child{white-space:nowrap;}
-.statusbar-btn:hover{color:var(--color-text);background:var(--color-surface-3);}
-.statusbar-btn:active{transform:scale(0.92);}
-
-.statusbar-badge{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  min-width:16px;
-  height:16px;
-  padding:0 5px;
-  border-radius:var(--radius-full);
-  background:var(--color-accent);
-  color:var(--color-accent-text);
-  font-size:var(--text-3xs);
-  font-weight:var(--weight-bold);
-  line-height:1;
 }
 
 /* View transitions */
@@ -318,79 +249,6 @@ button,input,select,textarea{
   pointer-events:auto;
 }
 
-/* Dashboard two-column instrument panel */
-.dash-grid{
-  display:grid;
-  grid-template-columns:minmax(360px,0.78fr) minmax(0,1fr);
-  gap:var(--space-5);
-  align-items:start;
-}
-.dash-left{
-  display:flex;
-  flex-direction:column;
-  gap:var(--space-4);
-}
-.dash-right{
-  display:flex;
-  flex-direction:column;
-  gap:var(--space-4);
-}
-.dash-grid .kpi-grid{
-  grid-template-columns:repeat(2,1fr);
-  margin-bottom:0;
-}
-.activity-table-wrap{
-  max-height:520px;
-  overflow-y:auto;
-}
-.dash-device-table-wrap{
-  max-height:420px;
-  overflow-y:auto;
-}
-
-/* Devices toolbar strip */
-.device-toolbar{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  padding:var(--space-3) var(--space-4);
-  background:var(--color-surface);
-  border:1px solid var(--color-border);
-  border-radius:var(--radius-sm);
-  margin-bottom:var(--space-4);
-  gap:var(--space-3);
-  flex-wrap:wrap;
-}
-.device-toolbar .toolbar-count{
-  font-size:var(--text-xs);
-  color:var(--color-text-dim);
-  font-weight:var(--weight-medium);
-}
-.device-toolbar .toolbar-count strong{
-  color:var(--color-text);
-}
-
-/* Collapsible statusbar detail panel */
-.statusbar-detail{
-  display:block;
-  grid-area:detail;
-  background:var(--color-surface);
-  border-top:1px solid var(--color-border);
-  max-height:0;
-  overflow:hidden;
-  padding:0 var(--space-4);
-  font-family:var(--font-mono);
-  font-size:var(--text-2xs);
-  color:var(--color-text-dim);
-  white-space:pre-wrap;
-  transition:max-height var(--dur-slow) ease,padding var(--dur-slow) ease;
-}
-.statusbar-detail.open{
-  max-height:160px;
-  overflow-y:auto;
-  padding:var(--space-2) var(--space-4);
-}
-
 /* Responsive */
 @media(max-width:1024px){
   .app-shell{
@@ -398,19 +256,6 @@ button,input,select,textarea{
   }
   .sidebar-link span:not(.sidebar-icon){display:none;}
   .sidebar-link{gap:0;justify-content:center;padding:var(--space-2) 0;}
-  .sidebar-group-label{display:none;}
-  .sidebar-badge{
-    position:absolute;
-    top:2px;
-    right:4px;
-    margin-left:0;
-    min-width:16px;
-    padding:0 4px;
-    font-size:var(--text-3xs);
-  }
-  .dash-grid{
-    grid-template-columns:1fr;
-  }
 }
 
 @media(max-width:720px){
@@ -421,13 +266,9 @@ button,input,select,textarea{
       "topbar"
       "main"
       "sidebar"
-      "statusbar"
-      "detail";
-    grid-template-rows:var(--topbar-height) minmax(0,1fr) auto var(--statusbar-height) 0;
+      "statusbar";
+    grid-template-rows:var(--topbar-height) minmax(0,1fr) auto var(--statusbar-height);
     height:100dvh;
-  }
-  .app-shell.detail-open{
-    grid-template-rows:var(--topbar-height) minmax(0,1fr) auto var(--statusbar-height) 160px;
   }
   .topbar{padding:0 var(--space-3);gap:var(--space-2);}
   .topbar-left{gap:var(--space-2);}
@@ -443,21 +284,16 @@ button,input,select,textarea{
     border-right:none;
     border-top:1px solid var(--color-border);
     padding:var(--space-1) var(--space-2) calc(var(--space-1) + env(safe-area-inset-bottom,0px));
-    overflow-x:auto;
     overflow-y:hidden;
   }
   .sidebar-nav{
     display:grid;
-    grid-auto-flow:column;
-    grid-auto-columns:minmax(68px,1fr);
-    grid-template-columns:none;
+    grid-template-columns:repeat(3,1fr);
     gap:var(--space-1);
-    width:max-content;
-    min-width:100%;
+    width:100%;
+    min-width:0;
     padding:0;
   }
-  .sidebar-group{display:contents;}
-  .sidebar-group-label{display:none;}
   .sidebar-link{
     flex-direction:column;
     justify-content:center;
@@ -479,40 +315,12 @@ button,input,select,textarea{
     transform:translateX(-50%) scaleX(0);
   }
   .sidebar-link.active::before{transform:translateX(-50%) scaleX(1);opacity:1;}
-  .sidebar-badge{
-    position:absolute;
-    top:2px;
-    right:6px;
-    margin-left:0;
-    min-width:16px;
-    padding:0 5px;
-    font-size:var(--text-3xs);
-  }
   .statusbar{padding:0 var(--space-3);font-size:var(--text-2xs);}
-  .statusbar-prefix{display:none;}
-  .statusbar-btn{
-    min-width:auto;
-    padding:2px 7px;
-  }
-  .dash-grid{gap:var(--space-3);}
-  .dash-left,.dash-right{gap:var(--space-3);}
-  .dash-grid .kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr));}
-  .activity-table-wrap,.dash-device-table-wrap{max-height:none;overflow-y:visible;}
-  .device-toolbar{align-items:stretch;}
-  .device-toolbar .btn-group{width:100%;}
-  .device-toolbar .btn-group .btn{flex:1 1 auto;}
 }
 
 @media(max-width:420px){
   .topbar-status{display:none;}
   .topbar-logo{font-size:var(--text-sm);}
-  .sidebar-nav{
-    grid-auto-flow:row;
-    grid-auto-columns:auto;
-    grid-template-columns:repeat(4,minmax(0,1fr));
-    width:100%;
-    min-width:0;
-  }
   .sidebar-link{
     min-width:0;
     min-height:46px;
@@ -523,23 +331,11 @@ button,input,select,textarea{
     white-space:nowrap;
     max-width:100%;
   }
-  .dash-grid .kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
   .statusbar{gap:var(--space-2);}
 }
 
 @media(max-width:360px){
-  .sidebar-nav{
-    grid-template-columns:repeat(4,minmax(0,1fr));
-    gap:2px;
-  }
-  .sidebar-badge{
-    min-width:14px;
-    font-size:var(--text-3xs);
-    padding:0 3px;
-    right:4px;
-  }
   .main{padding:var(--space-2);}
-  .dash-grid{gap:var(--space-3);}
   .topbar-btn{width:32px;height:32px;}
 }
 
@@ -548,7 +344,8 @@ button,input,select,textarea{
   .app-shell{max-width:1600px;margin:0 auto;border-left:1px solid var(--color-border);border-right:1px solid var(--color-border);}
   .main{
     max-width:1200px;
-    margin:0 auto;
+    width:100%;
+    margin:0;
   }
 }
 

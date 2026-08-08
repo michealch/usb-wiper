@@ -32,7 +32,7 @@ Open [http://localhost:8181](http://localhost:8181).
 | Category | Capabilities |
 |----------|-------------|
 | **Wipe Schemes** | Zero Fill, Random Fill, DoD 5220.22-M 3-pass, NIST 800-88 Clear, ATA Secure Erase |
-| **Verification** | Random 1 MiB chunk sampling (configurable 0–16 GiB), non-destructive "test wipe" mode |
+| **Verification** | Random 1 MiB chunk sampling (configurable 0–16 GiB) |
 | **Certificates** | Tamper-evident PDF + JSON, Ed25519-signed, offline-verifiable |
 | **Job Queue** | FIFO with configurable concurrency (1–4 simultaneous), ULID-based tracking, per-job cancel |
 | **Presets** | Named reusable configurations (4 built-in + custom), label templates with `{date}`/`{datetime}` vars |
@@ -41,9 +41,7 @@ Open [http://localhost:8181](http://localhost:8181).
 | **Real-time** | SSE push-driven — progress, device plug/unplug, job state changes, Last-Event-ID replay |
 | **Safety** | 9 non-negotiable safety checks before every destructive operation, re-validated at execution time |
 | **Audit** | Append-only JSON-lines audit log with correlation IDs, 50 MB auto-rotation |
-| **Metrics** | Prometheus `/metrics` endpoint with counters and gauges |
 | **HTTP** | Request correlation ULIDs via `X-Request-ID` header, structured logging |
-| **Notifications** | Webhook on job completion (SSRF-protected, private-IP blocked by default) |
 | **History** | Persistent JSON-backed wipe log with atomic writes |
 
 ## Configuration
@@ -53,12 +51,9 @@ Open [http://localhost:8181](http://localhost:8181).
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8181` | HTTP port |
-| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `DATA_DIR` | `/data` | Persistent data directory |
-| `METRICS_BIND` | `127.0.0.1:9090` | Prometheus metrics listen address (set to `off` to disable) |
 | `UNSAFE_ALLOW_ALL_USB` | (unset) | Skip removable-device check for USB SSD enclosures |
 | `ALLOW_HARDWARE_SECURE_ERASE` | (unset) | Enable ATA Secure Erase / NVMe Format scheme |
-| `UNSAFE_ALLOW_PRIVATE_WEBHOOKS` | (unset) | Allow webhook URLs pointing to private IPs |
 
 ### Volumes
 
@@ -84,7 +79,6 @@ services:
       - "8181:8181"
     environment:
       - UNSAFE_ALLOW_ALL_USB=1
-      - LOG_LEVEL=info
     restart: unless-stopped
 ```
 
@@ -132,7 +126,6 @@ Every completed wipe can generate a tamper-evident certificate:
 ## Security
 
 - **No external Go dependencies** — stdlib only; supply chain attack surface is minimal
-- **Webhook SSRF protection** — webhook URLs targeting private/loopback IPs are rejected unless explicitly opted in
 - **CORS restricted to local origins** — parsed via `net.ParseIP`, not prefix matching
 - **Certificate body capped at 1 MiB** — prevents memory exhaustion on verify endpoint
 - **Audit log is append-only with per-write `f.Sync()`** — crash-safe event trail
@@ -140,7 +133,7 @@ Every completed wipe can generate a tamper-evident certificate:
 ## Development
 
 ```bash
-git clone https://github.com/michealch/usb-wiper.git
+git clone https://github.com/michealchoudhary/usb-wiper.git
 cd usb-wiper
 make dev     # hot-reload dev server
 make test    # run tests

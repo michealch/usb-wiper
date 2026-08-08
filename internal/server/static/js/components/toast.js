@@ -1,6 +1,7 @@
 // Toast notification system
 
 import { escapeHtml } from '../util.js';
+import { attachOverlay } from './overlay.js';
 
 const container = document.createElement('div');
 container.className = 'toast-container';
@@ -39,36 +40,29 @@ function showToast(msg, type = 'info', duration = 5000) {
 
 function showConfirm(msg, {confirmLabel = 'Confirm', dangerLabel = '', onConfirm, onCancel} = {}) {
   const overlay = document.createElement('div');
-  overlay.className = 'modal-overlay';
-  
+  overlay.className = 'overlay';
+
   overlay.innerHTML = `
-    <div class="modal">
+    <div class="modal" tabindex="-1">
       <h2>Confirm</h2>
       <p>${escapeHtml(msg)}</p>
       <div class="modal-actions">
-        <button class="btn" id="modal-cancel">Cancel</button>
+        <button class="btn" id="modal-cancel" data-autofocus>Cancel</button>
         ${dangerLabel ? `<button class="btn btn-danger" id="modal-confirm">${dangerLabel}</button>` : `<button class="btn btn-primary" id="modal-confirm">${confirmLabel}</button>`}
       </div>
     </div>
   `;
-  
+
   document.body.appendChild(overlay);
-  requestAnimationFrame(() => overlay.classList.add('open'));
-  
-  const close = () => {
-    overlay.classList.remove('open');
-    document.removeEventListener('keydown', escHandler);
-    setTimeout(() => overlay.remove(), 200);
-  };
+  const handle = attachOverlay(overlay, overlay.querySelector('.modal'), {
+    onClose: () => {
+      setTimeout(() => overlay.remove(), 200);
+    }
+  });
+  handle.open();
 
-  overlay.querySelector('#modal-cancel').onclick = () => { close(); onCancel && onCancel(); };
-  overlay.querySelector('#modal-confirm').onclick = () => { close(); onConfirm && onConfirm(); };
-  overlay.onclick = (e) => { if (e.target === overlay) { close(); onCancel && onCancel(); } };
-
-  const escHandler = (e) => {
-    if (e.key === 'Escape') { close(); onCancel && onCancel(); }
-  };
-  document.addEventListener('keydown', escHandler);
+  overlay.querySelector('#modal-cancel').onclick = () => { handle.close(); onCancel && onCancel(); };
+  overlay.querySelector('#modal-confirm').onclick = () => { handle.close(); onConfirm && onConfirm(); };
 }
 
 export { showToast, showConfirm };

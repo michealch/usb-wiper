@@ -86,6 +86,40 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
+// withOriginCheck rejects state-changing cross-origin requests. Auth is handled by
+// an external gateway; this only stops a browser on another site from driving the
+// appliance with the operator's own session.
+func withOriginCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Same-origin fetches and non-browser clients (curl, health probes,
+		// the external gateway) are fine.
+		if secFetchSite := r.Header.Get("Sec-Fetch-Site"); secFetchSite == "same-origin" || secFetchSite == "none" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		u, err := url.Parse(origin)
+		if err == nil && u.Host == r.Host {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		writeError(w, http.StatusForbidden, "cross-origin request rejected")
+	})
+}
+
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -105,8 +139,10 @@ func (rw *responseWriter) Flush() {
 	}
 }
 
-// isLocalOrigin checks whether an Origin header value resolves to a local/private address.
-// It parses the URL, extracts the host, and checks the IP against private ranges.
+// isLocalOrigin checks whether an Origin header value is a literal local or
+// private address. Only literal hostnames (localhost) and directly parseable
+// IPs are accepted — a host that would need DNS resolution is refused, so an
+// attacker-controlled hostname cannot be resolved by the server.
 func isLocalOrigin(origin string) bool {
 	u, err := url.Parse(origin)
 	if err != nil {
@@ -120,18 +156,11 @@ func isLocalOrigin(origin string) bool {
 		return true
 	}
 
-	// Parse IP and check private/loopback ranges
+	// Parse IP and check private/loopback ranges. No resolution of hostnames:
+	// anything that is not a literal IP here is refused.
 	ip := net.ParseIP(host)
 	if ip == nil {
-		// Could be a hostname — resolve it
-		ips, err := net.LookupIP(host)
-		if err != nil {
-			return false
-		}
-		if len(ips) == 0 {
-			return false
-		}
-		ip = ips[0]
+		return false
 	}
 
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()

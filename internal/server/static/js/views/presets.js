@@ -1,75 +1,64 @@
-// Presets view
+// Presets panel renderer — used by the Settings screen's Presets tab.
+
+import { apiGet, apiPost, apiPut, apiDelete } from '../api.js';
+import { showToast, showConfirm } from '../components/toast.js';
+import { attachOverlay } from '../components/overlay.js';
+import { escapeHtml, escapeAttr, emptyState, schemeOptions, verifySizeOptions } from '../util.js';
 
 let presetsList = [];
+let schemesList = [];
+let editingPresetId = null;
+let presetModalEl = null;
+let presetModalHandle = null;
 
-async function loadAndRenderPresets() {
+// renderPresetsPanel(el) renders the preset tiles into el. The preset modal is
+// built lazily once and appended to document.body, surviving panel re-renders.
+export async function renderPresetsPanel(el) {
   try {
-    const data = await apiGet('/api/presets');
-    presetsList = data.presets || [];
-    renderPresets();
+    const [presetsData, schemesData] = await Promise.all([
+      apiGet('/api/presets'),
+      apiGet('/api/schemes').catch(() => ({ schemes: [] }))
+    ]);
+    presetsList = presetsData.presets || [];
+    schemesList = schemesData.schemes || [];
   } catch (e) {
-    document.getElementById('view-presets').innerHTML = '<div class="card"><p class="text-danger">Failed to load presets</p></div>';
+    el.innerHTML = `<p class="text-danger">Failed to load presets: ${escapeHtml(e.message)}</p>`;
+    return;
   }
-}
 
-function renderPresets() {
-  const el = document.getElementById('view-presets');
   el.innerHTML = `
-    <div class="view-shell">
-      <div class="page-head">
-        <div>
-          <div class="page-title">Presets</div>
-          <div class="page-subtitle">${presetsList.length} wipe configuration${presetsList.length === 1 ? '' : 's'}</div>
-        </div>
-        <div class="page-actions">
-          <button class="btn btn-primary btn-sm" id="btn-new-preset">New Preset</button>
-        </div>
+    <div class="panel-header">
+      <div>
+        <div class="panel-title">Presets</div>
+        <div class="panel-note">${presetsList.length} wipe configuration${presetsList.length === 1 ? '' : 's'}</div>
       </div>
-
-      <section class="panel">
-        ${presetsList.length === 0 ? `<div class="empty-state"><div class="empty-state-title">No presets yet.</div></div>` : `
-          <div class="preset-grid">
-            ${presetsList.map(p => `
-              <article class="preset-tile">
-                <div class="preset-top">
-                  <div>
-                    <div class="preset-name">${escapeHtml(p.name)}</div>
-                    <div class="panel-note text-mono">${escapeHtml(p.schemeId)}</div>
-                  </div>
-                  <span class="badge ${p.autoFormat ? 'badge-info' : 'badge-neutral'}">${p.autoFormat ? 'Format' : 'No format'}</span>
-                </div>
-                <dl class="preset-meta">
-                  <div><dt>Verify</dt><dd>${Number(p.verifySizeGB || 0)} GiB</dd></div>
-                  <div><dt>Label</dt><dd>${p.labelTemplate ? escapeHtml(p.labelTemplate) : '-'}</dd></div>
-                </dl>
-                <div class="btn-group">
-                  <button class="btn btn-sm preset-edit-btn" data-id="${escapeAttr(p.id)}">Edit</button>
-                  <button class="btn btn-sm btn-danger preset-delete-btn" data-id="${escapeAttr(p.id)}">Delete</button>
-                </div>
-              </article>`).join('')}
-            </div>
-        `}
-      </section>
-      <div class="modal-overlay" id="preset-modal">
-        <div class="modal">
-          <h2 id="preset-modal-title">New Preset</h2>
-          <div class="form-group"><label>Name</label><input type="text" id="preset-name" class="w-full" placeholder="My Preset"></div>
-          <div class="form-group"><label>Scheme</label><select id="preset-scheme" class="w-full"><option value="zero">Zero Fill</option><option value="random">Random Fill</option><option value="dod-3pass">DoD 3-Pass</option><option value="nist-clear">NIST Clear</option></select></div>
-          <div class="form-group"><label class="checkbox-label"><input type="checkbox" id="preset-autoformat"> Auto-format FAT32</label></div>
-          <div class="form-group"><label>Verify Size</label><select id="preset-verify" class="w-full"><option value="0">Off</option><option value="1" selected>1 GiB</option><option value="2">2 GiB</option><option value="4">4 GiB</option><option value="16">16 GiB</option></select></div>
-          <div class="form-group"><label>Label Template</label><input type="text" id="preset-label" class="w-full" placeholder="e.g. RMA-{date}-{serial}"></div>
-          <div class="modal-actions">
-            <button class="btn" id="btn-preset-cancel">Cancel</button>
-            <button class="btn btn-primary" id="btn-preset-save">Save</button>
-          </div>
-        </div>
-      </div>
+      <button class="btn btn-primary btn-sm" id="btn-new-preset">New Preset</button>
     </div>
+    ${presetsList.length === 0 ? emptyState('No presets yet.') : `
+      <div class="preset-grid">
+        ${presetsList.map(p => `
+          <article class="preset-tile">
+            <div class="preset-top">
+              <div>
+                <div class="preset-name">${escapeHtml(p.name)}</div>
+                <div class="panel-note text-mono">${escapeHtml(p.schemeId)}</div>
+              </div>
+              <span class="badge ${p.autoFormat ? 'badge-info' : 'badge-neutral'}">${p.autoFormat ? 'Format' : 'No format'}</span>
+            </div>
+            <dl class="preset-meta">
+              <div><dt>Verify</dt><dd>${Number(p.verifySizeGB || 0)} GiB</dd></div>
+              <div><dt>Label</dt><dd>${p.labelTemplate ? escapeHtml(p.labelTemplate) : '-'}</dd></div>
+            </dl>
+            <div class="btn-group">
+              <button class="btn btn-sm preset-edit-btn" data-id="${escapeAttr(p.id)}">Edit</button>
+              <button class="btn btn-sm btn-danger preset-delete-btn" data-id="${escapeAttr(p.id)}">Delete</button>
+            </div>
+          </article>`).join('')}
+      </div>
+    `}
   `;
 
   document.getElementById('btn-new-preset').onclick = () => openPresetModal();
-  document.getElementById('btn-preset-cancel').onclick = closePresetModal;
-  document.getElementById('btn-preset-save').onclick = savePreset;
 
   el.querySelectorAll('.preset-edit-btn').forEach(btn => {
     btn.onclick = () => {
@@ -78,12 +67,12 @@ function renderPresets() {
     };
   });
   el.querySelectorAll('.preset-delete-btn').forEach(btn => {
-    btn.onclick = async () => {
+    btn.onclick = () => {
       const p = presetsList.find(x => x.id === btn.dataset.id);
       showConfirm(`Delete preset "${p.name}"?`, {
         dangerLabel: 'Delete',
         onConfirm: async () => {
-          try { await apiDelete('/api/presets/' + p.id); showToast('Preset deleted', 'success'); loadAndRenderPresets(); }
+          try { await apiDelete('/api/presets/' + p.id); showToast('Preset deleted', 'success'); renderPresetsPanel(el); }
           catch (e) { showToast(e.message, 'error'); }
         }
       });
@@ -91,30 +80,51 @@ function renderPresets() {
   });
 }
 
-let editingPresetId = null;
+function buildPresetModal() {
+  presetModalEl = document.createElement('div');
+  presetModalEl.className = 'overlay';
+  presetModalEl.innerHTML = `
+    <div class="modal" tabindex="-1">
+      <h2 id="preset-modal-title">New Preset</h2>
+      <div class="form-group"><label>Name</label><input type="text" id="preset-name" class="w-full" placeholder="My Preset" data-autofocus></div>
+      <div class="form-group"><label>Scheme</label><select id="preset-scheme" class="w-full">${schemeOptions(schemesList, 'zero')}</select></div>
+      <div class="form-group"><label class="checkbox-label"><input type="checkbox" id="preset-autoformat"> Auto-format FAT32</label></div>
+      <div class="form-group"><label>Verify Size</label><select id="preset-verify" class="w-full">${verifySizeOptions(1)}</select></div>
+      <div class="form-group"><label>Label Template</label><input type="text" id="preset-label" class="w-full" placeholder="e.g. RMA-{date}-{serial}"></div>
+      <div class="modal-actions">
+        <button class="btn" id="btn-preset-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-preset-save">Save</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(presetModalEl);
+
+  presetModalHandle = attachOverlay(presetModalEl, presetModalEl.querySelector('.modal'), {
+    onClose: () => {
+      setTimeout(() => {
+        if (presetModalEl) { presetModalEl.remove(); presetModalEl = null; presetModalHandle = null; }
+      }, 200);
+    }
+  });
+
+  presetModalEl.querySelector('#btn-preset-cancel').onclick = closePresetModal;
+  presetModalEl.querySelector('#btn-preset-save').onclick = savePreset;
+}
+
 function openPresetModal(preset = null) {
   editingPresetId = preset ? preset.id : null;
+  if (!presetModalEl) buildPresetModal();
   document.getElementById('preset-modal-title').textContent = preset ? 'Edit Preset' : 'New Preset';
   document.getElementById('preset-name').value = preset ? preset.name : '';
   document.getElementById('preset-scheme').value = preset ? preset.schemeId : 'zero';
   document.getElementById('preset-autoformat').checked = preset ? preset.autoFormat : false;
   document.getElementById('preset-verify').value = preset ? preset.verifySizeGB : 1;
   document.getElementById('preset-label').value = preset ? preset.labelTemplate || '' : '';
-  document.getElementById('preset-modal').classList.add('open');
-  document.getElementById('preset-modal').onclick = (e) => { if (e.target === e.currentTarget) closePresetModal(); };
-  document.addEventListener('keydown', closePresetOnEsc);
-}
-
-function closePresetOnEsc(e) {
-  if (e.key === 'Escape') {
-    closePresetModal();
-    document.removeEventListener('keydown', closePresetOnEsc);
-  }
+  presetModalHandle.open();
 }
 
 function closePresetModal() {
-  document.getElementById('preset-modal').classList.remove('open');
-  document.removeEventListener('keydown', closePresetOnEsc);
+  if (presetModalHandle) presetModalHandle.close();
 }
 
 async function savePreset() {
@@ -136,12 +146,7 @@ async function savePreset() {
       showToast('Preset created', 'success');
     }
     closePresetModal();
-    loadAndRenderPresets();
+    const el = document.getElementById('view-settings').querySelector('#settings-panel-presets');
+    if (el) renderPresetsPanel(el);
   } catch (e) { showToast(e.message, 'error'); }
 }
-
-import { apiGet, apiPost, apiPut, apiDelete } from '../api.js';
-import { showToast, showConfirm } from '../components/toast.js';
-import { escapeHtml, escapeAttr } from '../util.js';
-
-export { loadAndRenderPresets, renderPresets };

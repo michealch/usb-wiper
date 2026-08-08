@@ -4,14 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"os"
+	"sort"
 	"sync"
 )
 
 // Scheme represents a wipe strategy (single-pass zero, DoD multi-pass, etc.).
 type Scheme interface {
-	ID() string         // "zero", "random", "dod-3pass", "nist-clear", "secure-erase"
+	ID() string          // "zero", "random", "dod-3pass", "nist-clear", "secure-erase"
 	DisplayName() string // human-readable name for UI
-	Passes() int        // number of write passes
+	Passes() int         // number of write passes
 	Execute(ctx context.Context, devicePath string, size uint64,
 		progress chan<- ProgressEvent) error
 }
@@ -37,7 +39,9 @@ func NewSchemeRegistry() *SchemeRegistry {
 	r.Register(&SchemeRandom{})
 	r.Register(&SchemeDoD{})
 	r.Register(&SchemeNISTClear{})
-	r.Register(&SchemeSecureErase{})
+	if os.Getenv("ALLOW_HARDWARE_SECURE_ERASE") == "1" {
+		r.Register(&SchemeSecureErase{})
+	}
 	return r
 }
 
@@ -62,6 +66,21 @@ func (r *SchemeRegistry) Get(id string) (Scheme, error) {
 	return s, nil
 }
 
+// displayOrder fixes the UI ordering of schemes: single-pass fastest first, multi-pass
+// next, firmware-level last. GET /api/schemes must be stable across requests because the
+// scheme <select> is rebuilt on every open, so List() sorts by this index. Ids absent
+// from the list sort last, alphabetically.
+var displayOrder = []string{"zero", "nist-clear", "random", "dod-3pass", "secure-erase"}
+
+func schemeRank(id string) int {
+	for i, s := range displayOrder {
+		if s == id {
+			return i
+		}
+	}
+	return len(displayOrder)
+}
+
 // List returns metadata for all registered schemes.
 func (r *SchemeRegistry) List() []SchemeMeta {
 	r.mu.RLock()
@@ -75,6 +94,13 @@ func (r *SchemeRegistry) List() []SchemeMeta {
 			Description: schemeDescription(s.ID()),
 		})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		ri, rj := schemeRank(out[i].ID), schemeRank(out[j].ID)
+		if ri != rj {
+			return ri < rj
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 
