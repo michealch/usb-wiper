@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -119,15 +120,24 @@ func IsSafeToWipe(devicePath string, unsafeAllowAllUSB bool) error {
 	// Check 9: Size sanity (must be <= 2 TB)
 	sizePath := filepath.Join("/sys/block", name, "size")
 	sizeData, err := os.ReadFile(sizePath)
-	if err == nil {
-		var sectors uint64
-		fmt.Sscanf(strings.TrimSpace(string(sizeData)), "%d", &sectors)
-		sizeBytes := sectors * 512
-		if sizeBytes > maxSafeSizeBytes {
-			return &SafetyError{
-				Reason: fmt.Sprintf("%q is %d bytes (>2TB); refusing to wipe large disks that may be USB-attached system storage", devicePath, sizeBytes),
-				Device: devicePath,
-			}
+	if err != nil {
+		return &SafetyError{
+			Reason: fmt.Sprintf("cannot read size for %s: %v", devicePath, err),
+			Device: devicePath,
+		}
+	}
+	sectors, err := strconv.ParseUint(strings.TrimSpace(string(sizeData)), 10, 64)
+	if err != nil {
+		return &SafetyError{
+			Reason: fmt.Sprintf("cannot parse size for %s: %v", devicePath, err),
+			Device: devicePath,
+		}
+	}
+	sizeBytes := sectors * 512
+	if sizeBytes > maxSafeSizeBytes {
+		return &SafetyError{
+			Reason: fmt.Sprintf("%q is %d bytes (>2TB); refusing to wipe large disks that may be USB-attached system storage", devicePath, sizeBytes),
+			Device: devicePath,
 		}
 	}
 

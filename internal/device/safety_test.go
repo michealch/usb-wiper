@@ -21,6 +21,19 @@ func TestIsSafeToWipe_RejectsNonExistentPath(t *testing.T) {
 	}
 }
 
+func TestIsSafeToWipe_RejectsUnreadableSize(t *testing.T) {
+	// A device whose /sys/block/<name>/size cannot be read must fail closed
+	// (check 9) rather than silently passing the size limit. The path does not
+	// exist, so the size read fails and a *SafetyError must be returned.
+	err := IsSafeToWipe("/dev/sdz", false)
+	if err == nil {
+		t.Fatal("expected error for device with unreadable size")
+	}
+	if _, ok := err.(*SafetyError); !ok {
+		t.Fatalf("expected *SafetyError, got %T: %v", err, err)
+	}
+}
+
 func TestIsSafeToWipe_RejectsPartitionPath(t *testing.T) {
 	err := IsSafeToWipe("/dev/sda1", false)
 	if err == nil {

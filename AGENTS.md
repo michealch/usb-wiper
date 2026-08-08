@@ -33,9 +33,14 @@ Important architectural choices:
 
 ## Setup Commands
 
-- Build local binary: `make build`
-- Run locally on Linux: `sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper`
-- Run via Makefile: `make run`
+All targets run inside a container — the host only needs Docker (no Go toolchain
+or Node required). Toolchain image defaults to `golang:1.26`; override with
+`GO_IMAGE=...`.
+
+- Build the binary (into `bin/`): `make build`
+- Run the appliance (containerized, host `/dev` + `/sys` mounted):
+  `make run` — add `UNSAFE_ALLOW_ALL_USB=1` to the command line when needed
+- Debug the appliance (dlv headless on :2345): `make debug`
 - Build Docker image: `make docker-build`
 - Start dev compose with hot reload: `make dev`
 - Start dev compose detached: `make dev-detached`
@@ -48,24 +53,38 @@ The app listens on `PORT` (default `8181`). Open `http://localhost:8181`.
 
 ## Testing Instructions
 
-Run relevant checks before finishing code changes:
+Run relevant checks before finishing code changes. Every command runs in a
+container (`golang:1.26`, Debian — the race detector needs cgo, which Alpine
+lacks):
 
 - Fast test pass: `make test-norace`
-- Full local test pass: `make test`
+- Full test pass (race detector): `make test`
 - Verbose full pass: `make test-verbose`
 - Vet: `make vet`
 - Format Go: `make fmt`
-- Optional linter: `make lint` (runs `go vet`; runs `golangci-lint` only if installed)
-- CI-equivalent core checks:
-  - `go vet ./...`
-  - `go test ./... -race -count=1 -coverprofile=coverage.out`
-  - `CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/usb-wiper ./cmd/usb-wiper`
+- Optional linter: `make lint` (runs `go vet`; runs `golangci-lint` in a
+  throwaway container)
 
-JavaScript has no build step. For edited ES modules, run syntax checks such as:
+CI-equivalent core checks:
+
+```bash
+docker run --rm -v "$PWD":/src -w /src \
+  -v "$HOME/.cache/go-docker":/root/.cache/go-build \
+  golang:1.26 go vet ./...
+docker run --rm -v "$PWD":/src -w /src \
+  -v "$HOME/.cache/go-docker":/root/.cache/go-build \
+  golang:1.26 go test ./... -race -count=1 -coverprofile=coverage.out
+CGO_ENABLED=0 go build -ldflags="-s -w" -o bin/usb-wiper ./cmd/usb-wiper  # inside a container
+```
+
+JavaScript has no build step. For edited ES modules, run syntax checks with the
+host `node` (or `node:22` container):
 
 ```bash
 node --check internal/server/static/js/app.js
-node --check internal/server/static/js/views/autowipe.js
+node --check internal/server/static/js/views/wipe.js
+node --check internal/server/static/js/components/overlay.js
+node --check internal/server/static/js/components/tabs.js
 ```
 
 Test locations:
@@ -76,7 +95,6 @@ Test locations:
 - JSON persistence stores: `internal/persistence/*_test.go`
 - Presets: `internal/presets/*_test.go`
 - Certificates: `internal/cert/*_test.go`
-- Webhook validation: `internal/notify/*_test.go`
 - ULIDs: `internal/ulid/*_test.go`
 
 Some device tests skip or are limited on non-Linux hosts. Real wipe behavior
@@ -93,13 +111,20 @@ Main entry points:
 - `internal/server/sse.go`: SSE hub and event replay.
 - `internal/server/static/index.html`: SPA shell.
 - `internal/server/static/js/app.js`: router, SSE connection, top-level UI glue.
-- `internal/server/static/js/views/`: individual UI screens.
+- `internal/server/static/js/views/`: individual UI screens — `wipe.js`,
+  `records.js` (History/Activity tabs), `history.js`, `activity.js`,
+  `settings.js` (General/Security tabs), `autowipe.js`, `presets.js`.
 - `internal/server/static/js/components/`: shared UI pieces — `drawer.js`
   (device inspection), `configurator.js` (batch wipe flow), `hold-confirm.js`
   (hold-to-confirm gate with reduced-motion/keyboard fallback), `cert.js`
-  (certificate download/verify), and `toast.js`.
+  (certificate download/verify), `toast.js`, `overlay.js` (shared overlay
+  behaviour: focus trap, restore, Escape/backdrop close), and `tabs.js`
+  (tab widget used by the drawer, Records, and Settings).
 - `internal/server/static/js/util.js`: shared helpers (`escapeHtml`,
-  `escapeAttr`, `formatBytes`, `countUp`, `applyStagger`).
+  `escapeAttr`, `formatBytes`, `formatDateTime`, `prefersReducedMotion`,
+  `badgeClassForStatus`, `deviceStatusBadge`, `resolveProgress`,
+  `segmentWidths`, `renderPassSegments`, `progressBar`, `emptyState`,
+  `activeJobByPath`, `schemeOptions`, `verifySizeOptions`).
 - `internal/server/static/css/`: `tokens.css` (design tokens — colors, type,
   spacing, glows, motion), `layout.css` (shell/chrome), `components.css`.
 
@@ -131,12 +156,10 @@ internal/cert/                  Ed25519 certificates and pure-Go PDF output
 internal/config/                persisted runtime settings
 internal/device/                USB discovery, identity, safety checks, SMART
 internal/format/                FAT32 formatting helpers
-internal/metrics/               Prometheus text metrics registry
-internal/notify/                webhook validation and delivery
+internal/jsonfile/              atomic JSON file read/write shared by all stores
 internal/persistence/           wipe history, SMART history, auto-wipe state
 internal/presets/               named wipe presets
 internal/queue/                 FIFO wipe job queue and worker lifecycle
-internal/scheduler/             legacy scheduler package, not exposed in UI/API
 internal/server/                HTTP server, handlers, middleware, SSE
 internal/server/static/         embedded frontend assets
 internal/ulid/                  stdlib-only ULID generator
@@ -198,14 +221,12 @@ Important endpoints:
 - `GET /api/health-history?deviceId=...`
 - `GET /api/history` and `GET /api/history?deviceId=...`
 - `POST /api/wipe`
-- `POST /api/test-wipe`
 - `POST /api/cancel`
 - `GET /api/jobs`
 - `POST /api/jobs/{id}/cancel`
 - `GET /api/schemes`
 - `GET/POST/PUT/DELETE /api/presets`
 - `GET/PUT /api/settings`
-- `GET/POST /api/config` for backward compatibility
 - `GET /api/autowipe`
 - `PUT /api/autowipe`
 - `DELETE /api/autowipe/seen`
@@ -248,7 +269,8 @@ Safety check summary:
 
 Go:
 
-- Use standard Go formatting: `gofmt` via `make fmt`.
+- Use standard Go formatting: `gofmt` via `make fmt` (runs in the toolchain
+  container).
 - Keep imports stdlib first, then internal packages.
 - Return errors with context using `fmt.Errorf("context: %w", err)`.
 - Use `context.Context` for long-running work and shell commands.
@@ -298,7 +320,7 @@ Docker build. Keep docs aligned with `.github/workflows/ci.yml` and `Makefile`.
 - Prefer conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`,
   `ci:`.
 - Run `make fmt`, `make vet`, and the relevant `make test*` target before
-  handoff.
+  handoff (all inside containers).
 - Include focused tests for new stores, queue behavior, identity behavior, or
   API validation.
 - Keep unrelated dirty worktree changes intact. Do not revert user changes.
@@ -319,9 +341,7 @@ Docker build. Keep docs aligned with `.github/workflows/ci.yml` and `Makefile`.
 
 ## Known Gaps
 
-- Auth settings exist but are not enforced by middleware.
-- `historyRetentionDays` is stored but not enforced.
-- Metrics are declared but not comprehensively updated by the queue.
-- The legacy `internal/scheduler` package still exists but scheduled wipes were
-  removed from the live UI/API.
+- Authentication is not implemented; deploy behind an authenticating reverse
+  proxy if the appliance is exposed beyond a trusted network.
+- Wipe and health history grow unbounded; no retention trimming is performed.
 - Hardware secure erase needs real-device validation; CI cannot cover it.

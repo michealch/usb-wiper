@@ -3,12 +3,12 @@
 package presets
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
+	"github.com/usb-wiper/internal/jsonfile"
 	"github.com/usb-wiper/internal/ulid"
 )
 
@@ -90,17 +90,9 @@ func New(dataDir string) (*Store, error) {
 
 // load reads presets from the JSON file.
 func (s *Store) load() error {
-	data, err := os.ReadFile(s.file)
-	if err != nil {
-		return err
-	}
-	if len(data) == 0 {
-		return nil
-	}
-
 	var presets []Preset
-	if err := json.Unmarshal(data, &presets); err != nil {
-		return fmt.Errorf("parse presets: %w", err)
+	if err := jsonfile.Read(s.file, "parse presets", &presets); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -207,46 +199,5 @@ func (s *Store) Delete(id string) error {
 
 // save atomically writes presets to file. Caller must hold the write lock.
 func (s *Store) save() error {
-	data, err := json.MarshalIndent(s.presets, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	data = append(data, '\n')
-
-	dir := filepath.Dir(s.file)
-	tmp, err := os.CreateTemp(dir, "presets-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("write temp: %w", err)
-	}
-
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("sync temp: %w", err)
-	}
-
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp: %w", err)
-	}
-
-	if err := os.Rename(tmpName, s.file); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename: %w", err)
-	}
-
-	// Sync directory for durability
-	if dirFd, err := os.Open(dir); err == nil {
-		dirFd.Sync()
-		dirFd.Close()
-	}
-
-	return nil
+	return jsonfile.Write(filepath.Dir(s.file), s.file, "presets-*.json.tmp", s.presets)
 }

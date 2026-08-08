@@ -3,20 +3,21 @@
 import { apiGet, apiPost } from '../api.js';
 import { showToast } from './toast.js';
 import { holdConfirm } from './hold-confirm.js';
-import { escapeHtml, escapeAttr, formatBytes } from '../util.js';
+import { escapeHtml, escapeAttr, formatBytes, schemeOptions, verifySizeOptions } from '../util.js';
 import { state } from '../state.js';
+import { attachOverlay } from './overlay.js';
 
 let overlay = null;
-let lastFocused = null;
+let overlayHandle = null;
 
 function buildOverlay() {
   overlay = document.createElement('div');
-  overlay.className = 'configurator-overlay';
+  overlay.className = 'overlay overlay-sheet';
   overlay.innerHTML = `
-    <div class="configurator" role="dialog" aria-modal="true" aria-labelledby="configurator-title">
+    <div class="configurator" role="dialog" aria-modal="true" aria-labelledby="configurator-title" tabindex="-1">
       <div class="configurator-header">
         <h2 id="configurator-title">Configure wipe</h2>
-        <button class="btn btn-ghost btn-sm" id="configurator-close" aria-label="Close">×</button>
+        <button class="btn btn-ghost btn-sm" id="configurator-close" aria-label="Close" data-autofocus>×</button>
       </div>
       <div class="configurator-body" id="configurator-body"></div>
       <div class="configurator-footer" id="configurator-footer"></div>
@@ -25,28 +26,21 @@ function buildOverlay() {
   document.body.appendChild(overlay);
 
   overlay.querySelector('#configurator-close').onclick = closeConfigurator;
-  overlay.onclick = (e) => { if (e.target === overlay) closeConfigurator(); };
-  document.addEventListener('keydown', escHandler);
-}
-
-function escHandler(e) {
-  if (e.key === 'Escape' && overlay && overlay.classList.contains('open')) {
-    closeConfigurator();
-  }
+  overlayHandle = attachOverlay(overlay, overlay.querySelector('.configurator'), {
+    onClose: () => {
+      // Delay removal so the fade-out still plays.
+      setTimeout(() => {
+        if (overlay) { overlay.remove(); overlay = null; overlayHandle = null; }
+      }, 200);
+    }
+  });
 }
 
 function closeConfigurator() {
-  if (!overlay) return;
-  overlay.classList.remove('open');
-  setTimeout(() => {
-    if (overlay) { overlay.remove(); overlay = null; }
-  }, 200);
-  document.removeEventListener('keydown', escHandler);
-  if (lastFocused && lastFocused.focus) lastFocused.focus();
+  if (overlayHandle) overlayHandle.close();
 }
 
 async function openConfigurator(devices) {
-  lastFocused = document.activeElement;
   if (!overlay) buildOverlay();
 
   const body = overlay.querySelector('#configurator-body');
@@ -54,7 +48,7 @@ async function openConfigurator(devices) {
   body.innerHTML = '<p class="muted">Loading schemes…</p>';
   footer.innerHTML = '';
 
-  requestAnimationFrame(() => overlay.classList.add('open'));
+  requestAnimationFrame(() => overlayHandle.open());
 
   let schemes = [];
   let presets = [];
@@ -69,9 +63,6 @@ async function openConfigurator(devices) {
   }
 
   renderConfigurator(devices, schemes, presets);
-
-  const closeBtn = overlay.querySelector('#configurator-close');
-  if (closeBtn) closeBtn.focus();
 }
 
 function renderConfigurator(devices, schemes, presets) {
@@ -118,7 +109,7 @@ function renderConfigurator(devices, schemes, presets) {
       <div class="form-group">
         <label for="cfg-scheme">Wipe scheme</label>
         <select id="cfg-scheme" class="w-full">
-          ${schemes.map(s => `<option value="${escapeAttr(s.id)}" ${s.id === defaultScheme ? 'selected' : ''}>${escapeHtml(s.displayName)} (${s.passes} pass${s.passes > 1 ? 'es' : ''})</option>`).join('')}
+          ${schemeOptions(schemes, defaultScheme)}
         </select>
       </div>
       <div class="form-group">
@@ -138,11 +129,7 @@ function renderConfigurator(devices, schemes, presets) {
       <div class="form-group">
         <label for="cfg-verify">Verification</label>
         <select id="cfg-verify" class="w-full">
-          <option value="0" ${defaultVerify === 0 ? 'selected' : ''}>Off</option>
-          <option value="1" ${defaultVerify === 1 ? 'selected' : ''}>1 GiB</option>
-          <option value="2" ${defaultVerify === 2 ? 'selected' : ''}>2 GiB</option>
-          <option value="4" ${defaultVerify === 4 ? 'selected' : ''}>4 GiB</option>
-          <option value="16" ${defaultVerify === 16 ? 'selected' : ''}>16 GiB</option>
+          ${verifySizeOptions(defaultVerify)}
         </select>
       </div>
       <div class="form-group">

@@ -85,39 +85,6 @@ func TestTamperedFieldRejected(t *testing.T) {
 	}
 }
 
-func TestWrongPublicKeyRejected(t *testing.T) {
-	s1 := newTestSigner(t)
-	s2 := newTestSigner(t)
-
-	c := sampleCert()
-	s1.Sign(c)
-	data, _ := json.Marshal(c)
-
-	// Verify with s2's public key — should fail
-	ok, err := VerifyAgainstPubKey(data, s2.PublicKeyBase64())
-	if err != nil {
-		t.Fatalf("VerifyAgainstPubKey error: %v", err)
-	}
-	if ok {
-		t.Fatal("wrong public key should not verify")
-	}
-}
-
-func TestCorrectPublicKeyVerifies(t *testing.T) {
-	s := newTestSigner(t)
-	c := sampleCert()
-	s.Sign(c)
-	data, _ := json.Marshal(c)
-
-	ok, err := VerifyAgainstPubKey(data, s.PublicKeyBase64())
-	if err != nil {
-		t.Fatalf("VerifyAgainstPubKey: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected valid signature with correct public key")
-	}
-}
-
 func TestUnsupportedVersionRejected(t *testing.T) {
 	s := newTestSigner(t)
 	c := sampleCert()

@@ -4,16 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"syscall"
 	"time"
-
-	"github.com/usb-wiper/internal/device"
 )
 
 const (
-	_ = iota
+	_  = iota
 	KB = 1 << (10 * iota)
 	MB
 	GB
@@ -32,118 +32,16 @@ func formatBytes(n uint64) string {
 	}
 }
 
-// FormatBytes formats a byte count into a human-readable string.
-func FormatBytes(n uint64) string {
-	return formatBytes(n)
-}
-
-// WipeJob tracks the state of an active or completed wipe operation.
-type WipeJob struct {
-	DevicePath    string    `json:"devicePath"`
-	TotalBytes    uint64    `json:"totalBytes"`
-	BytesWritten  uint64    `json:"bytesWritten"`
-	Status        string    `json:"status"` // "running", "completed", "failed", "cancelled"
-	StartedAt     time.Time `json:"startedAt"`
-	FinishedAt    time.Time `json:"finishedAt"`
-	Error         string    `json:"error"`
-	Verified      string    `json:"verified,omitempty"`   // "passed", "failed", or empty
-	BytesVerified uint64    `json:"bytesVerified"`        // how many bytes were verified
-}
-
 const (
-	StatusRunning   = "running"
-	StatusCompleted = "completed"
-	StatusFailed    = "failed"
-	StatusCancelled = "cancelled"
-
-	bufferSize  = 4 * 1024 * 1024 // 4 MiB
-	chunkSize   = 1 * 1024 * 1024 // 1 MiB per verification chunk
+	bufferSize = 4 * 1024 * 1024 // 4 MiB
+	chunkSize  = 1 * 1024 * 1024 // 1 MiB per verification chunk
 )
-
-// Wipe performs a single-pass zero-write on the specified device.
-// Progress is reported via the progress channel.
-func Wipe(ctx context.Context, devicePath string, progress chan<- ProgressEvent, unsafeAllowAllUSB bool) error {
-	// CRITICAL: Re-validate safety before any destructive operation
-	if err := device.IsSafeToWipe(devicePath, unsafeAllowAllUSB); err != nil {
-		return fmt.Errorf("safety check: %w", err)
-	}
-
-	// Open device for writing
-	f, err := os.OpenFile(devicePath, os.O_WRONLY|syscall.O_SYNC, 0)
-	if err != nil {
-		return fmt.Errorf("open device %s: %w", devicePath, err)
-	}
-	defer f.Close()
-
-	// Get device size via ioctl BLKGETSIZE64
-	totalBytes, err := BlkGetSize64(f)
-	if err != nil {
-		return fmt.Errorf("get device size: %w", err)
-	}
-
-	// Allocate zero buffer
-	buf := make([]byte, bufferSize)
-
-	startTime := time.Now()
-	var bytesWritten uint64
-	var lastReport time.Time
-	var samples []speedSample
-
-	for bytesWritten < totalBytes {
-		select {
-		case <-ctx.Done():
-			sendProgress(progress, devicePath, bytesWritten, totalBytes, startTime, samples, "cancelled")
-			return context.Canceled
-		default:
-		}
-
-		// Calculate remaining bytes
-		remaining := totalBytes - bytesWritten
-		writeSize := uint64(len(buf))
-		if remaining < writeSize {
-			writeSize = remaining
-		}
-
-		n, err := f.Write(buf[:writeSize])
-		if err != nil {
-			return fmt.Errorf("write at offset %d: %w", bytesWritten, err)
-		}
-		bytesWritten += uint64(n)
-
-		// Report progress every 250ms
-		now := time.Now()
-		if now.Sub(lastReport) >= 250*time.Millisecond || bytesWritten >= totalBytes {
-			sendProgress(progress, devicePath, bytesWritten, totalBytes, startTime, samples, "running")
-			lastReport = now
-
-			samples = append(samples, speedSample{
-				bytesWritten: bytesWritten,
-				timestamp:    now,
-			})
-			// Keep last 5 samples
-			if len(samples) > 5 {
-				samples = samples[len(samples)-5:]
-			}
-		}
-	}
-
-	// Sync and close
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("sync: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close: %w", err)
-	}
-
-	sendProgress(progress, devicePath, bytesWritten, totalBytes, startTime, samples, "completed")
-	return nil
-}
 
 // VerifyRandomChunks reads random 1 MiB chunks scattered across the device and
 // checks that all bytes are zero. The total data read across all chunks
 // approximately equals verifySize bytes (converted to MiB boundary).
 // Returns the number of bytes actually verified.
-func VerifyRandomChunks(devicePath string, totalBytes, verifySize uint64, progress chan<- ProgressEvent) (uint64, error) {
+func VerifyRandomChunks(ctx context.Context, devicePath string, totalBytes, verifySize uint64, progress chan<- ProgressEvent) (uint64, error) {
 	if verifySize == 0 || totalBytes == 0 {
 		return 0, nil
 	}
@@ -172,10 +70,14 @@ func VerifyRandomChunks(devicePath string, totalBytes, verifySize uint64, progre
 	defer f.Close()
 
 	buf := make([]byte, chunkSize)
+	readLen := uint64(chunkSize)
+	if totalBytes < readLen {
+		readLen = totalBytes
+	}
+	span := totalBytes - readLen // cannot underflow: readLen <= totalBytes
 	totalVerified := uint64(0)
 
 	// Generate random offsets
-	maxOffset := totalBytes - chunkSize
 	// Use a deterministic seed derived from time so we can report which offsets
 	// were checked, while still being "random enough" across the device.
 	seed := make([]byte, 8)
@@ -192,10 +94,19 @@ func VerifyRandomChunks(devicePath string, totalBytes, verifySize uint64, progre
 		s1 ^= s0
 		s0 = ((s0 << 55) | (s0 >> 9)) ^ s1 ^ (s1 << 14)
 		s1 = ((s1 << 36) | (s1 >> 28))
-		offset := s0 % maxOffset
+		offset := uint64(0)
+		if span > 0 {
+			offset = s0 % span
+		}
 
-		n, err := f.ReadAt(buf, int64(offset))
-		if err != nil && err.Error() != "EOF" {
+		select {
+		case <-ctx.Done():
+			return totalVerified, ctx.Err()
+		default:
+		}
+
+		n, err := f.ReadAt(buf[:readLen], int64(offset))
+		if err != nil && !errors.Is(err, io.EOF) {
 			return totalVerified, fmt.Errorf("read at offset %d: %w", offset, err)
 		}
 		if n == 0 {
@@ -234,6 +145,9 @@ func VerifyRandomChunks(devicePath string, totalBytes, verifySize uint64, progre
 		}
 	}
 
+	if totalVerified == 0 {
+		return 0, fmt.Errorf("verification read no data from %s; refusing to report a pass", devicePath)
+	}
 	return totalVerified, nil
 }
 

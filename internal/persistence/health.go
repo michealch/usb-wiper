@@ -1,12 +1,13 @@
 package persistence
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/usb-wiper/internal/jsonfile"
 )
 
 // HealthRecord is a point-in-time SMART/health snapshot for a physical disk.
@@ -60,16 +61,9 @@ func (s *HealthStore) filePath() string {
 }
 
 func (s *HealthStore) load() error {
-	data, err := os.ReadFile(s.filePath())
-	if err != nil {
-		return err
-	}
-	if len(data) == 0 {
-		return nil
-	}
 	var records []HealthRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		return fmt.Errorf("parse health history: %w", err)
+	if err := jsonfile.Read(s.filePath(), "parse health history", &records); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	s.records = records
@@ -119,41 +113,5 @@ func (s *HealthStore) GetLatestByDeviceID(deviceID string) *HealthRecord {
 }
 
 func (s *HealthStore) save() error {
-	data, err := json.MarshalIndent(s.records, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	data = append(data, '\n')
-
-	dir := s.dataDir
-	tmp, err := os.CreateTemp(dir, "health-history-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp: %w", err)
-	}
-	dest := s.filePath()
-	if err := os.Rename(tmpName, dest); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename: %w", err)
-	}
-	if dirFd, err := os.Open(dir); err == nil {
-		dirFd.Sync()
-		dirFd.Close()
-	}
-	return nil
+	return jsonfile.Write(s.dataDir, s.filePath(), "health-history-*.json.tmp", s.records)
 }

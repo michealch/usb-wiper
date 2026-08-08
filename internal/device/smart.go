@@ -54,38 +54,54 @@ var smartDeviceTypes = []string{
 	"sntrealtek", // Realtek NVMe bridges
 }
 
+// probeSmartDeviceTypes runs one smartctl probe per known USB-bridge device type and keeps
+// the highest-scoring result. attempt parses a single probe; ok=false discards it. The loop
+// stops at the first result scoring >= earlyExit. Returns the best value and its score, or
+// the zero value and -1 when nothing parsed.
+func probeSmartDeviceTypes[T any](
+	mode, devicePath string,
+	timeout time.Duration,
+	earlyExit int,
+	attempt func(stdout, stderr []byte, runErr error, deviceType string) (T, int, bool),
+) (T, int) {
+	var best T
+	bestScore := -1
+	for _, dt := range smartDeviceTypes {
+		stdout, stderr, err := runSmartctlJSON(mode, devicePath, dt, timeout)
+		v, score, ok := attempt(stdout, stderr, err, dt)
+		if !ok {
+			continue
+		}
+		if score > bestScore {
+			best, bestScore = v, score
+		}
+		if score >= earlyExit {
+			return v, score
+		}
+	}
+	return best, bestScore
+}
+
 // GetSmartIdentity tries to read physical disk identity via smartctl.
 // Returns zero values on failure (caller should fall back to sysfs).
 // Uses a short timeout to avoid blocking device enumeration.
 func GetSmartIdentity(devicePath string) SmartIdentity {
-	bestScore := -1
-	best := SmartIdentity{}
+	best, bestScore := probeSmartDeviceTypes("-i", devicePath, 3*time.Second, 30,
+		func(output, _ []byte, err error, _ string) (SmartIdentity, int, bool) {
+			if err != nil && len(output) == 0 {
+				return SmartIdentity{}, 0, false
+			}
 
-	for _, dt := range smartDeviceTypes {
-		output, _, err := runSmartctlJSON("-i", devicePath, dt, 3*time.Second)
-		if err != nil && len(output) == 0 {
-			continue
-		}
+			var raw map[string]interface{}
+			if json.Unmarshal(output, &raw) != nil {
+				return SmartIdentity{}, 0, false
+			}
 
-		var raw map[string]interface{}
-		if json.Unmarshal(output, &raw) != nil {
-			continue
-		}
-
-		attempt := parseSmartIdentity(raw)
-
-		score := smartIdentityScore(raw, attempt)
-		if score > bestScore {
-			bestScore = score
-			best = attempt
-		}
-
-		// Full disk identity is enough. Bridge-only device metadata is not:
-		// a later -d snt* probe may expose the actual NVMe behind the bridge.
-		if score >= 30 {
-			return attempt
-		}
-	}
+			attempt := parseSmartIdentity(raw)
+			// Full disk identity is enough. Bridge-only device metadata is not:
+			// a later -d snt* probe may expose the actual NVMe behind the bridge.
+			return attempt, smartIdentityScore(raw, attempt), true
+		})
 
 	if bestScore > 0 {
 		return best
@@ -99,29 +115,22 @@ func GetSmartIdentity(devicePath string) SmartIdentity {
 func GetHealth(devicePath string) (*Health, error) {
 	var lastErr error
 	var lastStderr string
-	var best *Health
-	bestScore := -1
 
-	for _, dt := range smartDeviceTypes {
-		output, stderr, err := runSmartctlJSON("-a", devicePath, dt, 5*time.Second)
-		lastErr = err
-		lastStderr = strings.TrimSpace(string(stderr))
+	best, _ := probeSmartDeviceTypes("-a", devicePath, 5*time.Second, 80,
+		func(output, stderr []byte, err error, dt string) (*Health, int, bool) {
+			lastErr = err
+			lastStderr = strings.TrimSpace(string(stderr))
 
-		if health := parseSmartJSON(output); health != nil {
+			health := parseSmartJSON(output)
+			if health == nil {
+				return nil, 0, false
+			}
 			health.DeviceType = smartDeviceTypeLabel(dt)
 			if health.Raw != nil {
 				health.Raw["usb_wiper_smartctl_type"] = health.DeviceType
 			}
-			score := smartHealthScore(health)
-			if score > bestScore {
-				best = health
-				bestScore = score
-			}
-			if score >= 80 {
-				return health, nil
-			}
-		}
-	}
+			return health, smartHealthScore(health), true
+		})
 
 	if best != nil {
 		return best, nil

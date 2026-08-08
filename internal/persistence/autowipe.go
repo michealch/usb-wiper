@@ -1,12 +1,13 @@
 package persistence
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/usb-wiper/internal/jsonfile"
 )
 
 // AutoWipeRecord tracks a physical device identity already seen by auto-wipe.
@@ -48,16 +49,9 @@ func (s *AutoWipeStore) filePath() string {
 }
 
 func (s *AutoWipeStore) load() error {
-	data, err := os.ReadFile(s.filePath())
-	if err != nil {
-		return err
-	}
-	if len(data) == 0 {
-		return nil
-	}
 	var records []AutoWipeRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		return fmt.Errorf("parse auto wipe state: %w", err)
+	if err := jsonfile.Read(s.filePath(), "parse auto wipe state", &records); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -140,38 +134,5 @@ func (s *AutoWipeStore) saveLocked() error {
 	for _, rec := range s.records {
 		records = append(records, rec)
 	}
-	data, err := json.MarshalIndent(records, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	data = append(data, '\n')
-
-	tmp, err := os.CreateTemp(s.dataDir, "auto-wipe-seen-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Rename(tmpName, s.filePath()); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename: %w", err)
-	}
-	if dirFd, err := os.Open(s.dataDir); err == nil {
-		dirFd.Sync()
-		dirFd.Close()
-	}
-	return nil
+	return jsonfile.Write(s.dataDir, s.filePath(), "auto-wipe-seen-*.json.tmp", records)
 }

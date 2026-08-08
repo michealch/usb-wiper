@@ -17,11 +17,9 @@ Securely wipe USB storage devices from your browser.
 - **SMART Health History** — NVMe and ATA health info via smartctl with multi-bridge auto-detection, plus local history by physical device.
 - **Auto Wipe** — Optional, disabled-by-default mode that queues the default wipe scheme when a newly attached trusted disk serial appears. Already-connected drives are marked seen when enabling.
 - **Batch Wipe Configurator** — Multi-select one or many devices and drive them through a single focused configurator (targets, scheme/preset, options) gated by a deliberate hold-to-confirm, with a reduced-motion / keyboard fallback.
-- **Real-time UI** — Modern, grouped sidebar layout with a live wipe dashboard (animated progress gauge), devices view with inspection drawer, queue panel, history viewer, activity log, Auto Wipe, presets editor, and settings page. Dark/light themes with depth and tasteful motion (all gated behind `prefers-reduced-motion`).
+- **Real-time UI** — Three screens (Wipe, Records, Settings), device inspection drawer, segmented multi-pass progress bar, dark/light themes, all motion gated behind `prefers-reduced-motion`.
 - **Server-Sent Events** — Push-driven progress updates, device plug/unplug detection.
 - **Auto-Format** — Optional FAT32 formatting after wipe.
-- **Webhook Notifications** — POST webhook on job completion.
-- **Prometheus Metrics** — `/metrics` endpoint with counters and gauges.
 - **Docker** — Single container, Debian stable-slim base.
 
 ## Quick Start
@@ -56,7 +54,6 @@ services:
     environment:
       - UNSAFE_ALLOW_ALL_USB=1
       - ALLOW_HARDWARE_SECURE_ERASE=1
-      - LOG_LEVEL=info
     restart: unless-stopped
 ```
 
@@ -67,29 +64,41 @@ docker compose up -d
 ### Option 3: Clone and build
 
 ```bash
-git clone https://github.com/michealch/usb-wiper.git
+git clone https://github.com/michealchoudhary/usb-wiper.git
 cd usb-wiper
 make prod
 ```
 
-### Option 4: Run without Docker (Linux only)
+### Option 4: Run in a container (any OS with Docker)
 
 ```bash
-make build
-sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
+make run                      # builds + runs the appliance, mounts /dev and /sys
+make run UNSAFE_ALLOW_ALL_USB=1   # when your USB SSD/enclosure reports removable=0
 ```
+
+`make build` builds the Linux binary into `bin/` inside a container (no Go
+toolchain needed on the host). `make debug` runs the app under a headless `dlv`
+debugger on `:2345` for IDE attachment. See `make help` for the full target
+list — every target runs inside a container.
 
 ## Environment Variables
 
 | Variable                       | Default          | Description |
 |-------------------------------|------------------|-------------|
 | `PORT`                        | `8181`           | HTTP port |
-| `LOG_LEVEL`                   | `info`           | Log level: `debug`, `info`, `warn`, `error` |
 | `DATA_DIR`                    | `/data`          | Data directory for history, SMART health history, auto-wipe state, presets, settings, certificates, audit log |
-| `METRICS_BIND`                | `127.0.0.1:9090` | Prometheus metrics listen address (set to `off` to disable) |
 | `UNSAFE_ALLOW_ALL_USB`        | (unset)          | Skip removable-device check for USB SSDs/enclosures |
 | `ALLOW_HARDWARE_SECURE_ERASE` | (unset)          | Enable ATA Secure Erase / NVMe Format scheme |
-| `UNSAFE_ALLOW_PRIVATE_WEBHOOKS` | (unset)        | Allow webhook URLs pointing to private/internal IPs |
+
+Compose overrides go in an env file. The compose targets run fine without one
+(they use built-in defaults and `${VAR:-default}` interpolation); copy
+`deploy/.env.example` to `deploy/.env` and pass it explicitly when you want to
+override values:
+
+```bash
+cp deploy/.env.example deploy/.env
+docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up --build -d
+```
 
 ## API Reference
 
@@ -106,7 +115,6 @@ sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 | Method | Path                  | Description |
 |--------|-----------------------|-------------|
 | POST   | `/api/wipe`           | Start wipe (supports multi-device, scheme, preset) |
-| POST   | `/api/test-wipe`      | Read-only verification |
 | POST   | `/api/cancel`         | Cancel by device or all |
 
 ### Jobs
@@ -133,8 +141,6 @@ sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 |--------|-----------------------|-------------|
 | GET    | `/api/settings`       | Get settings |
 | PUT    | `/api/settings`       | Update settings |
-| GET    | `/api/config`         | Get config (backward compat) |
-| POST   | `/api/config`         | Update config (backward compat) |
 
 ### Auto Wipe
 
@@ -158,7 +164,6 @@ sudo UNSAFE_ALLOW_ALL_USB=1 ./bin/usb-wiper
 | Method | Path                  | Description |
 |--------|-----------------------|-------------|
 | GET    | `/api/audit`          | Read audit log |
-| GET    | `/metrics`            | Prometheus metrics |
 | GET    | `/healthz`            | Liveness probe |
 | GET    | `/api/events`         | SSE stream |
 
@@ -231,16 +236,21 @@ before queueing and again in the queue worker.
 
 ## Development
 
+Every target below runs inside a container — the host only needs Docker (no Go
+toolchain or Node). Toolchain image defaults to `golang:1.26`; override with
+`GO_IMAGE=...`.
+
 ```bash
-make build          # Build local binary
-make run            # Run locally (requires sudo)
-make test           # Run tests with race detector
+make build          # Build binary (inside a container)
+make run            # Run the appliance in a container (mounts /dev and /sys)
+make debug          # Run under dlv headless debugger (attach on :2345)
+make test           # Run tests with race detector (inside a container)
 make test-verbose   # Verbose tests with race detector
 make test-norace    # Run tests without race detector
-make fmt            # Format code
-make vet            # Run go vet
-make lint           # Linter (requires golangci-lint)
-make tidy           # Go mod tidy
+make fmt            # Format code (inside a container)
+make vet            # Run go vet (inside a container)
+make lint           # go vet + golangci-lint (in a throwaway container)
+make tidy           # Go mod tidy (inside a container)
 make dev            # Dev compose with hot reload (air)
 make dev-detached   # Dev compose in background
 make docker-build   # Build production Docker image
@@ -261,12 +271,10 @@ internal/
   config/              → In-memory + persisted settings
   device/              → USB detection, safety checks, SMART
   format/              → FAT32 formatting
-  metrics/             → Prometheus metrics registry
-  notify/              → Webhook notifications
+  jsonfile/            → Atomic JSON file read/write shared by all stores
   persistence/         → JSON wipe history, SMART history, auto-wipe state
   presets/             → Named reusable wipe presets
   queue/               → FIFO job queue with concurrency control
-  scheduler/           → Legacy scheduler package; not exposed in live UI/API
   server/              → HTTP server, SSE hub, all handlers
   server/static/       → Embedded web UI (ES modules, dark/light themes)
   ulid/                → ULID generator (stdlib-only)

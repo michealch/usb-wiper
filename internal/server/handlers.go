@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +13,6 @@ import (
 	cert2 "github.com/usb-wiper/internal/cert"
 	"github.com/usb-wiper/internal/config"
 	"github.com/usb-wiper/internal/device"
-	"github.com/usb-wiper/internal/notify"
 	"github.com/usb-wiper/internal/persistence"
 	"github.com/usb-wiper/internal/presets"
 	"github.com/usb-wiper/internal/queue"
@@ -200,8 +198,7 @@ func (s *Server) handlePostWipe(w http.ResponseWriter, r *http.Request) {
 		Label        string   `json:"label"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -325,50 +322,6 @@ func (s *Server) handlePostCancel(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ---- Test wipe endpoint ----
-
-func (s *Server) handlePostTestWipe(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Device       string `json:"device"`
-		VerifySizeGB *int   `json:"verifySizeGB"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-
-	if req.Device == "" {
-		writeError(w, http.StatusBadRequest, "device field required")
-		return
-	}
-
-	cfg := s.config.Get()
-
-	if err := device.IsSafeToWipe(req.Device, cfg.UnsafeAllowAllUSB); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	verifySizeGB := cfg.VerifySizeGB
-	if req.VerifySizeGB != nil {
-		verifySizeGB = *req.VerifySizeGB
-	}
-
-	liveDevice := s.findLiveDevice(req.Device)
-	_, err := s.jobs.Enqueue(enqueueRequestForDevice(req.Device, liveDevice, "zero", false, verifySizeGB, "test-wipe"))
-	if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
-
-	s.sendRefreshEvent()
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status": "started",
-		"device": req.Device,
-	})
-}
-
 // ---- Job endpoints ----
 
 func (s *Server) handleGetJobs(w http.ResponseWriter, r *http.Request) {
@@ -431,8 +384,7 @@ func (s *Server) handlePostPresets(w http.ResponseWriter, r *http.Request) {
 		LabelTemplate string `json:"labelTemplate"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -464,8 +416,7 @@ func (s *Server) handlePutPreset(w http.ResponseWriter, r *http.Request) {
 		LabelTemplate *string `json:"labelTemplate"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -495,17 +446,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	var updates config.ConfigUpdate
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &updates) {
 		return
-	}
-
-	// Validate webhook URL if being set
-	if updates.WebhookURL != nil && *updates.WebhookURL != "" {
-		if err := notify.ValidateURL(*updates.WebhookURL); err != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid webhook URL: %v", err))
-			return
-		}
 	}
 
 	if updates.AutoWipeEnabled != nil && *updates.AutoWipeEnabled && !s.config.Get().AutoWipeEnabled {
@@ -520,31 +462,6 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.config.Update(updates)
-	writeJSON(w, http.StatusOK, s.config.Get())
-}
-
-// ---- Backward-compat config endpoints ----
-
-func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.config.Get())
-}
-
-func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
-	var cfg struct {
-		AutoFormat   bool `json:"autoFormat"`
-		VerifySizeGB *int `json:"verifySizeGB"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-
-	s.config.SetAutoFormat(cfg.AutoFormat)
-	if cfg.VerifySizeGB != nil {
-		s.config.SetVerifySizeGB(*cfg.VerifySizeGB)
-	}
-
 	writeJSON(w, http.StatusOK, s.config.Get())
 }
 
@@ -627,11 +544,6 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- SSE event writer for named events ----
-
-func init() {
-	// Ensure wipe package is loaded
-	_ = wipe.StatusRunning
-}
 
 // ---- Helpers ----
 
@@ -888,23 +800,10 @@ func (s *Server) handleGetPubKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetCertJSON(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("jobId")
 
-	// Find job in queue (job IDs are ULIDs stored in the queue)
-	job, err := s.jobs.Get(jobID)
+	cert, status, err := s.certForJob(jobID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "job not found")
+		writeError(w, status, err.Error())
 		return
-	}
-
-	if job.Status != queue.StatusCompleted && job.Status != queue.StatusFailed {
-		writeError(w, http.StatusBadRequest, "certificate only available for completed/failed jobs")
-		return
-	}
-
-	cert := s.buildCertificate(job)
-	if s.signer != nil {
-		if err := s.signer.Sign(cert); err != nil {
-			log.Printf("WARNING: failed to sign certificate: %v", err)
-		}
 	}
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"certificate-%s.json\"", jobID))
@@ -914,15 +813,10 @@ func (s *Server) handleGetCertJSON(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetCertPDF(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("jobId")
 
-	job, err := s.jobs.Get(jobID)
+	cert, status, err := s.certForJob(jobID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "job not found")
+		writeError(w, status, err.Error())
 		return
-	}
-
-	cert := s.buildCertificate(job)
-	if s.signer != nil {
-		s.signer.Sign(cert)
 	}
 
 	pdf := cert2.GeneratePDF(cert)
@@ -930,6 +824,29 @@ func (s *Server) handleGetCertPDF(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/pdf")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"certificate-%s.pdf\"", jobID))
 	w.Write(pdf)
+}
+
+// certForJob loads a job and builds its signed certificate. It refuses jobs that
+// have not reached a terminal state, so a certificate can never attest to a wipe
+// that did not happen.
+func (s *Server) certForJob(jobID string) (*cert2.Certificate, int, error) {
+	job, err := s.jobs.Get(jobID)
+	if err != nil {
+		return nil, http.StatusNotFound, fmt.Errorf("job not found")
+	}
+
+	if job.Status != queue.StatusCompleted && job.Status != queue.StatusFailed {
+		return nil, http.StatusBadRequest, fmt.Errorf("certificate only available for completed/failed jobs")
+	}
+
+	cert := s.buildCertificate(job)
+	if s.signer != nil {
+		if err := s.signer.Sign(cert); err != nil {
+			log.Printf("WARNING: failed to sign certificate: %v", err)
+		}
+	}
+
+	return cert, http.StatusOK, nil
 }
 
 func (s *Server) handlePostCertVerify(w http.ResponseWriter, r *http.Request) {
@@ -1058,8 +975,7 @@ func (s *Server) handlePutAutoWipe(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled *bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.Enabled == nil {

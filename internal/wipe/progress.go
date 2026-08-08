@@ -15,13 +15,13 @@ type ProgressEvent struct {
 	Percent       float64       `json:"percent"`
 	Speed         uint64        `json:"speed"` // bytes per second
 	ETA           time.Duration `json:"eta"`
-	CurrentPass   int           `json:"currentPass"`   // which pass (1-based) for multi-pass schemes
-	TotalPasses   int           `json:"totalPasses"`   // total passes for this scheme
+	CurrentPass   int           `json:"currentPass"` // which pass (1-based) for multi-pass schemes
+	TotalPasses   int           `json:"totalPasses"` // total passes for this scheme
 	Status        string        `json:"status"`
 	Message       string        `json:"message"`
 	Timestamp     time.Time     `json:"timestamp"`
-	Verified      string        `json:"verified,omitempty"`   // "passed", "failed"
-	BytesVerified uint64        `json:"bytesVerified"`        // how many bytes were verified
+	Verified      string        `json:"verified,omitempty"` // "passed", "failed"
+	BytesVerified uint64        `json:"bytesVerified"`      // how many bytes were verified
 }
 
 type speedSample struct {

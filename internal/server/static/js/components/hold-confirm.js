@@ -6,9 +6,7 @@
 // before completion cancels. Under prefers-reduced-motion (or for users who
 // can't sustain a hold) it falls back to an explicit two-step "Arm" -> "Confirm".
 
-function prefersReducedMotion() {
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
+import { prefersReducedMotion } from '../util.js';
 
 function holdConfirm(buttonEl, { durationMs = 2500, onConfirm, liveRegion } = {}) {
   if (!buttonEl) return;
@@ -116,4 +114,4 @@ function holdConfirm(buttonEl, { durationMs = 2500, onConfirm, liveRegion } = {}
   buttonEl.addEventListener('click', (e) => e.preventDefault());
 }
 
-export { holdConfirm, prefersReducedMotion };
+export { holdConfirm };

@@ -5,12 +5,13 @@
 package persistence
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/usb-wiper/internal/jsonfile"
 )
 
 // WipeRecord represents a single wipe operation in history.
@@ -62,20 +63,9 @@ func (s *Store) filePath() string {
 
 // load reads all records from the history file.
 func (s *Store) load() error {
-	data, err := os.ReadFile(s.filePath())
-	if err != nil {
-		return err
-	}
-
-	// File may be empty
-	if len(data) == 0 {
-		return nil
-	}
-
-	// Parse JSON array
 	var records []WipeRecord
-	if err := json.Unmarshal(data, &records); err != nil {
-		return fmt.Errorf("parse history: %w", err)
+	if err := jsonfile.Read(s.filePath(), "parse history", &records); err != nil {
+		return err
 	}
 
 	s.mu.Lock()
@@ -96,29 +86,6 @@ func (s *Store) Append(record WipeRecord) error {
 	return err
 }
 
-// UpdateByDevice finds a record by device path (matching the latest) and
-// updates its fields. Returns the updated record.
-func (s *Store) UpdateByDevice(devicePath string, fn func(*WipeRecord)) error {
-	s.mu.Lock()
-	found := false
-	for i := len(s.records) - 1; i >= 0; i-- {
-		if s.records[i].DevicePath == devicePath {
-			fn(&s.records[i])
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		s.mu.Unlock()
-		return fmt.Errorf("no record found for %s", devicePath)
-	}
-
-	err := s.save()
-	s.mu.Unlock()
-	return err
-}
-
 // GetAll returns a copy of all wipe records (newest first).
 func (s *Store) GetAll() []WipeRecord {
 	s.mu.RLock()
@@ -129,19 +96,6 @@ func (s *Store) GetAll() []WipeRecord {
 		result[i] = s.records[j]
 	}
 	return result
-}
-
-// GetLatest returns the most recent record for a device path, or nil.
-func (s *Store) GetLatest(devicePath string) *WipeRecord {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for i := len(s.records) - 1; i >= 0; i-- {
-		if s.records[i].DevicePath == devicePath {
-			r := s.records[i]
-			return &r
-		}
-	}
-	return nil
 }
 
 // GetLatestByDeviceID returns the most recent record for a trusted physical
@@ -181,52 +135,5 @@ func (s *Store) GetByDeviceID(deviceID string) []WipeRecord {
 // save atomically writes records to the history file using a temp file + rename.
 // Caller must hold s.mu.
 func (s *Store) save() error {
-	data, err := json.MarshalIndent(s.records, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	data = append(data, '\n')
-
-	// Use a unique temp file name to prevent concurrent writers from
-	// corrupting each other (s.mu serializes writes, but CreateTemp is
-	// the safe pattern).
-	dir := s.dataDir
-	tmp, err := os.CreateTemp(dir, "history-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("write temp: %w", err)
-	}
-
-	// Sync the temp file before rename for crash safety
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return fmt.Errorf("sync temp: %w", err)
-	}
-
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("close temp: %w", err)
-	}
-
-	// Atomic rename
-	dest := s.filePath()
-	if err := os.Rename(tmpName, dest); err != nil {
-		os.Remove(tmpName)
-		return fmt.Errorf("rename: %w", err)
-	}
-
-	// Sync the directory to ensure the rename is durable
-	if dirFd, err := os.Open(dir); err == nil {
-		dirFd.Sync()
-		dirFd.Close()
-	}
-
-	return nil
+	return jsonfile.Write(s.dataDir, s.filePath(), "history-*.json.tmp", s.records)
 }

@@ -16,7 +16,12 @@
 
 # Local environment files
 .env
-*.env
+.env.*
+!.env.example
+
+# Local compose env overrides (example is tracked)
+/deploy/.env
+/deploy/*.env
 
 # OS/editor/tool noise
 .DS_Store

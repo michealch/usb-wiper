@@ -11,7 +11,7 @@ type SchemeZero struct{}
 
 func (s *SchemeZero) ID() string          { return "zero" }
 func (s *SchemeZero) DisplayName() string { return "Zero Fill" }
-func (s *SchemeZero) Passes() int          { return 1 }
+func (s *SchemeZero) Passes() int         { return 1 }
 
 func (s *SchemeZero) Execute(ctx context.Context, devicePath string, size uint64,
 	progress chan<- ProgressEvent) error {
@@ -25,14 +25,14 @@ type SchemeNISTClear struct{ SchemeZero }
 
 func (s *SchemeNISTClear) ID() string          { return "nist-clear" }
 func (s *SchemeNISTClear) DisplayName() string { return "NIST 800-88 Clear" }
-func (s *SchemeNISTClear) Passes() int          { return 1 }
+func (s *SchemeNISTClear) Passes() int         { return 1 }
 
 // SchemeRandom performs a single pass of crypto-random bytes.
 type SchemeRandom struct{}
 
 func (s *SchemeRandom) ID() string          { return "random" }
 func (s *SchemeRandom) DisplayName() string { return "Random Fill" }
-func (s *SchemeRandom) Passes() int          { return 1 }
+func (s *SchemeRandom) Passes() int         { return 1 }
 
 func (s *SchemeRandom) Execute(ctx context.Context, devicePath string, size uint64,
 	progress chan<- ProgressEvent) error {
@@ -48,7 +48,7 @@ type SchemeDoD struct{}
 
 func (s *SchemeDoD) ID() string          { return "dod-3pass" }
 func (s *SchemeDoD) DisplayName() string { return "DoD 5220.22-M 3-Pass" }
-func (s *SchemeDoD) Passes() int          { return 3 }
+func (s *SchemeDoD) Passes() int         { return 3 }
 
 func (s *SchemeDoD) Execute(ctx context.Context, devicePath string, size uint64,
 	progress chan<- ProgressEvent) error {

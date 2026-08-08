@@ -33,9 +33,10 @@
 
   --color-focus: var(--color-primary);
 
+  --color-scrim: rgba(8,11,18,.6);
+
   /* Legacy aliases (kept for compatibility with components still referencing them) */
   --color-accent: var(--color-primary);
-  --color-accent-dim: var(--color-primary-hover);
   --color-accent-text: var(--color-primary-text);
 
   /* Type scale (rem) */
@@ -53,10 +54,8 @@
   /* Line heights */
   --leading-tight: 1.2;
   --leading-normal: 1.5;
-  --leading-relaxed: 1.65;
 
   /* Type weights */
-  --weight-normal: 400;
   --weight-medium: 520;
   --weight-semibold: 600;
   --weight-bold: 700;
@@ -67,10 +66,7 @@
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
-  --space-6: 32px;
-  --space-7: 40px;
   --space-8: 48px;
-  --space-10: 64px;
 
   /* Radii */
   --radius-xs: 4px;
@@ -85,8 +81,6 @@
   --shadow-sm: 0 2px 6px rgba(8,11,18,.3);
   --shadow-md: 0 8px 24px rgba(8,11,18,.45), 0 2px 6px rgba(8,11,18,.3);
   --shadow-lg: 0 16px 48px rgba(8,11,18,.5), 0 4px 12px rgba(8,11,18,.35);
-  --shadow-1: var(--shadow-xs);
-  --shadow-2: var(--shadow-md);
   --shadow-drawer: -8px 0 32px rgba(8,11,18,.5);
 
   /* Typography */
@@ -111,7 +105,6 @@
   /* Glows — colored emphasis shadows (dark) */
   --glow-primary: 0 0 0 1px var(--color-primary-tint), 0 10px 26px -8px rgba(110,123,255,.5);
   --glow-danger: 0 0 0 1px var(--color-danger-tint), 0 10px 30px -8px rgba(242,87,108,.55);
-  --glow-success: 0 0 0 1px var(--color-success-tint), 0 10px 26px -8px rgba(47,193,133,.45);
 
   /* Atmospheric backdrop — layered radial mesh over --color-bg (dark) */
   --bg-gradient:
@@ -140,6 +133,7 @@
   --color-primary-press: #3a31c2;
   --color-primary-tint: rgba(79,70,229,.10);
   --color-primary-text: #fff;
+  --color-scrim: rgba(20,24,34,.42);
 
   --color-danger: #dc3a52;
   --color-danger-hover: #c52e44;
@@ -158,14 +152,11 @@
   --shadow-sm: 0 2px 6px rgba(20,24,34,.06);
   --shadow-md: 0 8px 24px rgba(20,24,34,.10), 0 2px 6px rgba(20,24,34,.06);
   --shadow-lg: 0 16px 48px rgba(20,24,34,.14), 0 4px 12px rgba(20,24,34,.08);
-  --shadow-1: var(--shadow-xs);
-  --shadow-2: var(--shadow-md);
   --shadow-drawer: -8px 0 32px rgba(20,24,34,.12);
 
   /* Glows — softer/lower-alpha for light theme */
   --glow-primary: 0 0 0 1px var(--color-primary-tint), 0 10px 24px -8px rgba(79,70,229,.28);
   --glow-danger: 0 0 0 1px var(--color-danger-tint), 0 10px 26px -8px rgba(220,58,82,.3);
-  --glow-success: 0 0 0 1px var(--color-success-tint), 0 10px 24px -8px rgba(31,157,107,.26);
 
   /* Atmospheric backdrop — barely-there in light */
   --bg-gradient:
