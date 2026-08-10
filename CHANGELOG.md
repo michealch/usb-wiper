@@ -1,4 +1,14 @@
 
+## [0.6.24] - 2026-08-10
+
+
+### Chore
+
+- Update debian:stable-slim docker digest to 0d97731 (#32)
+
+
+
+
 ## [0.6.23] - 2026-08-08
 
 
