@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/usb-wiper ./cmd/usb-wiper
 
 # ---- Runtime stage ----
-FROM debian:stable-slim@sha256:1710bde34461551a19a47c787885ec9ad7058d9a5bead2affb8d088fa2f8502b
+FROM debian:stable-slim@sha256:04634311a8d5fc442b6eb06d792293c4f3e2268652ca7634e00ce8ef5cc0a28a
 RUN apt-get update && apt-get install -y --no-install-recommends \
     smartmontools \
     dosfstools \
