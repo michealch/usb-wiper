@@ -3,7 +3,7 @@
 # Debug image: builds the app from the mounted source tree with debug
 # symbols and runs it under dlv (headless, listening on :2345), so
 # `make debug` gives an attachable Go debugger without any host toolchain.
-ARG BASE_IMAGE=golang:1.26
+ARG BASE_IMAGE=golang:1.27@sha256:512690a5660563b57d37ecc31129e7f136e831db2aed24a1dbeb8ad7380dc0fa
 FROM ${BASE_IMAGE}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
