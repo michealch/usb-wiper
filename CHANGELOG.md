@@ -1,4 +1,14 @@
 
+## [0.6.31] - 2026-09-07
+
+
+### Chore
+
+- Update golang:1.26-alpine docker digest to ce864e7 (#42)
+
+
+
+
 ## [0.6.30] - 2026-08-31
 
 
