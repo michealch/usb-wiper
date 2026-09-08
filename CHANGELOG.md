@@ -1,4 +1,14 @@
 
+## [0.6.32] - 2026-09-08
+
+
+### Chore
+
+- Update orhun/git-cliff-action action to v4.9.0 (#44)
+
+
+
+
 ## [0.6.31] - 2026-09-07
 
 
