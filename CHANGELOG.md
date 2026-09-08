@@ -1,4 +1,14 @@
 
+## [0.6.33] - 2026-09-08
+
+
+### Chore
+
+- Update docker/setup-buildx-action action to v4.3.0 (#40)
+
+
+
+
 ## [0.6.32] - 2026-09-08
 
 
