@@ -1,4 +1,14 @@
 
+## [0.6.37] - 2026-09-21
+
+
+### Chore
+
+- Update debian:stable-slim docker digest to 5bc3287 (#46)
+
+
+
+
 ## [0.6.36] - 2026-09-14
 
 
