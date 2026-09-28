@@ -1,4 +1,14 @@
 
+## [0.6.39] - 2026-09-28
+
+
+### Chore
+
+- Update golang:1.26-alpine docker digest to 8ac98ca (#48)
+
+
+
+
 ## [0.6.38] - 2026-09-21
 
 
