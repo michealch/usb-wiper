@@ -1,4 +1,14 @@
 
+## [0.6.42] - 2026-10-12
+
+
+### Chore
+
+- Update debian:stable-slim docker digest to eb593cf (#53)
+
+
+
+
 ## [0.6.41] - 2026-10-05
 
 
