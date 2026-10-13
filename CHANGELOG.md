@@ -1,4 +1,15 @@
 
+## [0.6.43] - 2026-10-13
+
+
+### Chore
+
+- Update golang:1.26 docker digest to d772206 (#54)
+- Update golang:1.26-alpine docker digest to 3082400 (#55)
+
+
+
+
 ## [0.6.42] - 2026-10-12
 
 
