@@ -1,4 +1,14 @@
 
+## [0.6.45] - 2026-10-19
+
+
+### Chore
+
+- Update golang:1.26 docker digest to 37cfcca (#57)
+
+
+
+
 ## [0.6.44] - 2026-10-13
 
 
