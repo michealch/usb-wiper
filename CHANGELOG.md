@@ -1,4 +1,14 @@
 
+## [0.6.46] - 2026-10-26
+
+
+### Chore
+
+- Update debian:stable-slim docker digest to a717a33 (#58)
+
+
+
+
 ## [0.6.45] - 2026-10-19
 
 
