@@ -1,4 +1,14 @@
 
+## [0.6.49] - 2026-10-27
+
+
+### Chore
+
+- Update golang:1.26-alpine docker digest to a2012b4 (#60)
+
+
+
+
 ## [0.6.48] - 2026-10-27
 
 
