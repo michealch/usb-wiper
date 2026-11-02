@@ -1,4 +1,14 @@
 
+## [0.6.50] - 2026-11-02
+
+
+### Chore
+
+- Update debian:stable-slim docker digest to 13e0a2e (#62)
+
+
+
+
 ## [0.6.49] - 2026-10-27
 
 
