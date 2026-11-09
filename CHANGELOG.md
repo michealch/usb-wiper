@@ -1,4 +1,14 @@
 
+## [0.6.52] - 2026-11-09
+
+
+### Chore
+
+- Update debian:stable-slim docker digest to fbfb405 (#65)
+
+
+
+
 ## [0.6.51] - 2026-11-02
 
 
