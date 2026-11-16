@@ -1,4 +1,14 @@
 
+## [0.6.55] - 2026-11-16
+
+
+### Chore
+
+- Update golang:1.26-alpine docker digest to ecb67f9 (#68)
+
+
+
+
 ## [0.6.54] - 2026-11-16
 
 
